@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WAYVORA SYNTHETIC TEST FIXTURE
+  Provenance: Synthetic demonstration track representing an alpine ridge ascent.
+  Not surveyed GIS or GPS data. Created for Wayvora milestone testing.
+-->
+<gpx version="1.1" creator="Wayvora Test Studio" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Synthetic Alpine Ridge Climb</name>
+    <desc>Synthetic mountain hiking track for Wayvora Phase 1 GPX import verification</desc>
+    <time>2026-08-10T07:00:00Z</time>
+  </metadata>
+  <wpt lat="46.5700" lon="7.9350">
+    <name>Stechelberg Trailhead</name>
+    <desc>Hike departure trailhead</desc>
+    <ele>915.0</ele>
+    <sym>Trailhead</sym>
+  </wpt>
+  <wpt lat="46.5590" lon="7.9490">
+    <name>Tree Line Vista</name>
+    <desc>Scenic valley overlook</desc>
+    <ele>1475.0</ele>
+    <sym>Scenic View</sym>
+  </wpt>
+  <wpt lat="46.5450" lon="7.9700">
+    <name>Mountain Hut Summit</name>
+    <desc>High alpine destination</desc>
+    <ele>2240.0</ele>
+    <sym>Summit</sym>
+  </wpt>
+  <trk>
+    <name>Alpine Ridge Ascent (Trail)</name>
+    <desc>Steep mountain ascent with 1325m elevation gain</desc>
+    <type>hiking</type>
+    <trkseg>
+      <trkpt lat="46.5700" lon="7.9350">
+        <ele>915.0</ele>
+        <time>2026-08-10T07:00:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5680" lon="7.9380">
+        <ele>1040.5</ele>
+        <time>2026-08-10T07:15:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5650" lon="7.9420">
+        <ele>1180.2</ele>
+        <time>2026-08-10T07:30:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5620" lon="7.9450">
+        <ele>1320.0</ele>
+        <time>2026-08-10T07:45:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5590" lon="7.9490">
+        <ele>1475.0</ele>
+        <time>2026-08-10T08:05:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5560" lon="7.9530">
+        <ele>1650.0</ele>
+        <time>2026-08-10T08:25:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5530" lon="7.9570">
+        <ele>1820.0</ele>
+        <time>2026-08-10T08:45:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5500" lon="7.9620">
+        <ele>1980.0</ele>
+        <time>2026-08-10T09:05:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5480" lon="7.9660">
+        <ele>2110.0</ele>
+        <time>2026-08-10T09:20:00Z</time>
+      </trkpt>
+      <trkpt lat="46.5450" lon="7.9700">
+        <ele>2240.0</ele>
+        <time>2026-08-10T09:35:00Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

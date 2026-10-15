@@ -13,6 +13,7 @@ import { evaluateTimeline } from './domain/timeline';
 import { deserializeProject, downloadProject } from './domain/serialization';
 import { totalDistance, computeBounds } from './domain/geo';
 import type { Journey, TransportMode, CameraMode } from './domain/types';
+import { parseGpx, appendGpxToJourney, type GpxParseResult } from './domain/gpx';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -66,6 +67,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'stops' | 'stats'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
 
+  // GPX Import State
+  const [gpxResult, setGpxResult] = useState<GpxParseResult | null>(null);
+  const [isGpxModalOpen, setIsGpxModalOpen] = useState(false);
+  const gpxFileInputRef = useRef<HTMLInputElement>(null);
+
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<Map | null>(null);
@@ -73,6 +79,7 @@ export default function App() {
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
 
   // Derived metrics
   const allPoints = useMemo(() => getAllPoints(journey), [journey]);
@@ -332,6 +339,69 @@ export default function App() {
     e.target.value = '';
   };
 
+  // GPX Import Handlers
+  const handleSelectGpxFile = () => {
+    gpxFileInputRef.current?.click();
+  };
+
+  const handleGpxInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = reader.result as string;
+        const res = parseGpx(text, file.name);
+        setGpxResult(res);
+        setIsGpxModalOpen(true);
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Failed to parse GPX file');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleLoadSampleGpx = async (url: string, filename: string) => {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const text = await resp.text();
+      const res = parseGpx(text, filename);
+      setGpxResult(res);
+      setIsGpxModalOpen(true);
+    } catch (err: unknown) {
+      showNotification(`Failed to load sample GPX: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleConfirmNewJourneyFromGpx = () => {
+    if (!gpxResult) return;
+    const newJourney = gpxResult.toJourney();
+    setJourney(newJourney);
+    setSelectedPreset('custom');
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setIsGpxModalOpen(false);
+    showNotification(`Imported GPX: "${newJourney.name}" (${(gpxResult.summary.totalDistanceMetres / 1000).toFixed(2)} km)`);
+    const pts = getAllPoints(newJourney);
+    if (mapInstanceRef.current && pts.length > 0) {
+      fitMapToBounds(mapInstanceRef.current, pts);
+    }
+  };
+
+  const handleConfirmAppendGpx = () => {
+    if (!gpxResult) return;
+    const updated = appendGpxToJourney(journey, gpxResult);
+    setJourney(updated);
+    setIsGpxModalOpen(false);
+    showNotification(`Appended GPX track to current journey (${updated.segments.length} segments)`);
+    const pts = getAllPoints(updated);
+    if (mapInstanceRef.current && pts.length > 0) {
+      fitMapToBounds(mapInstanceRef.current, pts);
+    }
+  };
+
   // Render Elevation Profile Path
   const elevationSvgPath = useMemo(() => {
     const pts = allPoints.filter(p => p.ele != null);
@@ -375,6 +445,9 @@ export default function App() {
                 {p.title}
               </option>
             ))}
+            {selectedPreset === 'custom' && (
+              <option value="custom">★ Imported GPX Journey</option>
+            )}
           </select>
         </div>
 
@@ -394,6 +467,16 @@ export default function App() {
         </div>
 
         <div className="header-actions">
+          <input
+            type="file"
+            ref={gpxFileInputRef}
+            style={{ display: 'none' }}
+            accept=".gpx,application/gpx+xml"
+            onChange={handleGpxInputChange}
+          />
+          <button className="btn-ghost" onClick={handleSelectGpxFile} title="Import GPS hiking tracks or trail segments">
+            Import GPX
+          </button>
           <input
             type="file"
             ref={fileInputRef}
@@ -441,6 +524,57 @@ export default function App() {
           <div className="sidebar-scroll">
             {activeTab === 'stops' ? (
               <>
+                <div style={{ marginBottom: '14px' }}>
+                  <div
+                    className="gpx-dropzone"
+                    onClick={handleSelectGpxFile}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files[0];
+                      if (file && (file.name.endsWith('.gpx') || file.type.includes('gpx') || file.type.includes('xml'))) {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          try {
+                            const res = parseGpx(reader.result as string, file.name);
+                            setGpxResult(res);
+                            setIsGpxModalOpen(true);
+                          } catch (err: unknown) {
+                            alert(err instanceof Error ? err.message : 'Failed to parse GPX file');
+                          }
+                        };
+                        reader.readAsText(file);
+                      }
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#00f2fe', marginBottom: '2px' }}>
+                      📁 Drop GPX or Click to Browse
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Preserves elevations, timestamps & segments
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                    <button
+                      className="btn-ghost"
+                      style={{ fontSize: '10px', padding: '4px 6px', flex: 1, textAlign: 'center' }}
+                      onClick={() => handleLoadSampleGpx('/fixtures/kokoda-track-real-activity.gpx', 'kokoda-track-real-activity.gpx')}
+                      title="Load real recorded GPS walking track"
+                    >
+                      📍 Real GPS Track
+                    </button>
+                    <button
+                      className="btn-ghost"
+                      style={{ fontSize: '10px', padding: '4px 6px', flex: 1, textAlign: 'center' }}
+                      onClick={() => handleLoadSampleGpx('/fixtures/synthetic-alpine-ridge-climb.gpx', 'synthetic-alpine-ridge-climb.gpx')}
+                      title="Load synthetic alpine climb test fixture"
+                    >
+                      ⛰️ Synthetic Climb
+                    </button>
+                  </div>
+                </div>
+
                 <div className="section-label">
                   <span>Waypoints & Trails</span>
                   <button
@@ -744,6 +878,99 @@ export default function App() {
 
       {/* Toast Notification */}
       {notification && <div className="notification-toast">{notification}</div>}
+
+      {/* GPX Inspection & Import Modal */}
+      {isGpxModalOpen && gpxResult && (
+        <div className="modal-backdrop" onClick={() => setIsGpxModalOpen(false)}>
+          <div className="gpx-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>
+                <span>GPX Import Inspection</span>
+                <span style={{ fontSize: '12px', color: '#00f2fe', fontWeight: 400 }}>
+                  {gpxResult.summary.filename}
+                </span>
+              </h3>
+              <button
+                className="btn-ghost"
+                style={{ padding: '2px 8px' }}
+                onClick={() => setIsGpxModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: '1.5' }}>
+                {gpxResult.summary.name ? <strong>{gpxResult.summary.name}</strong> : 'Unnamed Track'}{' '}
+                {gpxResult.summary.description && <span>— {gpxResult.summary.description}</span>}
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Creator: {gpxResult.summary.creator || 'Standard GPX'} | Imported: {new Date(gpxResult.summary.importedAt).toLocaleTimeString()}
+                </div>
+              </div>
+
+              <div className="gpx-summary-grid">
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Total Distance</span>
+                  <span className="stat-value">{(gpxResult.summary.totalDistanceMetres / 1000).toFixed(2)} km</span>
+                </div>
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Track Points</span>
+                  <span className="stat-value">{gpxResult.summary.totalPoints}</span>
+                </div>
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Track Segments</span>
+                  <span className="stat-value">{gpxResult.summary.totalSegments}</span>
+                </div>
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Waypoints</span>
+                  <span className="stat-value">{gpxResult.summary.totalWaypoints}</span>
+                </div>
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Elevation Coverage</span>
+                  <span className="stat-value">{gpxResult.summary.elevationCoveragePct}%</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    +{gpxResult.summary.elevationGainMetres}m / -{gpxResult.summary.elevationLossMetres}m
+                  </span>
+                </div>
+                <div className="gpx-stat-card">
+                  <span className="stat-label">Timestamp Coverage</span>
+                  <span className="stat-value">{gpxResult.summary.timestampCoveragePct}%</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {gpxResult.summary.durationSeconds ? `${Math.round(gpxResult.summary.durationSeconds / 60)} min` : 'No duration'}
+                  </span>
+                </div>
+              </div>
+
+              {gpxResult.summary.warnings.length > 0 && (
+                <div className="gpx-warning-box">
+                  <strong style={{ display: 'block', marginBottom: '4px' }}>Validation Notes & Data Coverage:</strong>
+                  <ul style={{ margin: 0, paddingLeft: '16px' }}>
+                    {gpxResult.summary.warnings.map((w, idx) => (
+                      <li key={idx}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn-ghost" onClick={() => setIsGpxModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-ghost"
+                onClick={handleConfirmAppendGpx}
+                title="Append imported route to current journey without replacing existing segments"
+              >
+                Append to Current Journey
+              </button>
+              <button className="btn-primary" onClick={handleConfirmNewJourneyFromGpx}>
+                Create as New Journey
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

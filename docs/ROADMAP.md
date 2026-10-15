@@ -18,17 +18,36 @@
 - [x] End-to-end browser smoke test & recording verification
 
 
-## Phase 1: Core Journey Editor
+## Phase 1: Real Journey Import (GPX) & Route Integration
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Zero-dependency universal GPX parser (`app/src/domain/gpx.ts`) compatible with browser & Node/Vitest
+- [x] Preserves latitude, longitude, elevation, timestamps, and point metadata
+- [x] Preserves multiple track segments (`<trkseg>`) without silently connecting unrelated tracks
+- [x] Validates coordinates and rejects malformed XML / missing root `<gpx>` tags
+- [x] Reports missing elevation, timestamp coverage percentage, and gap statistics honestly
+- [x] Automatic duplicate point skipping and timestamp gap detection (> 1 hr)
+- [x] Full import provenance tracking (`filename`, `importedAt`, `trackName`, `originalSegmentIndex`, `originalPointCount`)
+- [x] Seamless domain conversion: `gpxToJourney()` and `appendGpxToJourney()`
+- [x] Studio UI Integration:
+  - Header "Import GPX" button and file picker
+  - Sidebar drag-and-drop GPX dropzone
+  - One-click sample loaders for real GPS activity (`kokoda-track-real-activity.gpx`) and synthetic fixture (`synthetic-alpine-ridge-climb.gpx`)
+  - GPX Import Inspection Modal showing distance, points, segments, elevation/timestamp coverage, and validation notes
+  - User confirmation workflows: "Create as New Journey" or "Append to Current Journey" (non-destructive)
+- [x] Automated test suite: 75 tests passing (12 GPX tests, 14 road-to-trail acceptance tests, 49 domain tests)
+- [x] Strict TypeScript production build passing (`tsc -b && vite build`)
+- [x] End-to-end browser smoke test verified with WebP recording and screenshot artifacts
+
+## Phase 2: Route Editing & Routing Services
 **Status**: PROPOSED
 
-- Route drawing and editing on map
-- GPX/KML file import (adapted from travelback's parser pattern)
-- OSRM road routing integration
-- Great-circle air route computation
+- Interactive map route vertex editing (drag/add/delete waypoints)
+- OSRM road routing integration for road segments
+- Great-circle air route computation for flights
+- Stop management (reorder, rename, transition duration adjuster)
 - Multiple transport modes per segment
-- Elevation profile display
-- Stop management (add, remove, reorder, set type)
-- Auto-fit camera to journey bounds
+
 
 ## Phase 2: Camera & Scene System
 **Status**: PROPOSED

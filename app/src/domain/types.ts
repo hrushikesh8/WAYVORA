@@ -50,13 +50,32 @@ export function segmentTypeForMode(mode: TransportMode): SegmentType {
 
 // ── Journey Segment ──
 
+export interface ProvenanceMetadata {
+  source?: string;
+  filename?: string;
+  importedAt?: string;
+  trackName?: string;
+  originalSegmentIndex?: number;
+  originalPointCount?: number;
+  distanceMetres?: number;
+  elevationGainMetres?: number;
+  elevationLossMetres?: number;
+  [key: string]: unknown;
+}
+
+export interface SegmentMetadata {
+  provenance?: string | ProvenanceMetadata;
+  isOriginalImport?: boolean;
+  [key: string]: unknown;
+}
+
 export interface JourneySegment {
   id: string;
   type: SegmentType;
   transportMode: TransportMode;
   points: RoutePoint[];
   sourceFormat: SourceFormat;
-  metadata?: Record<string, unknown>;
+  metadata?: SegmentMetadata;
 }
 
 // ── Stops ──
