@@ -143,6 +143,8 @@ export interface ExportJobConfig {
   cinematicTreatment?: CinematicTreatment;
   /** Whether to draw subtle dashed safe area guide overlay (for preview) */
   drawSafeAreaGuides?: boolean;
+  /** Optional map and terrain attribution watermark for video export compliance */
+  attributionText?: string;
   /** Optional time range in seconds (defaults to full journey) */
   timeRange?: {
     startTime: number;

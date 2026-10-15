@@ -19,6 +19,8 @@ export interface ComposeFrameOptions {
   cinematicTreatment?: CinematicTreatment;
   /** Whether to draw subtle dashed safe area guide overlay (for preview) */
   drawSafeAreaGuides?: boolean;
+  /** Optional map and terrain attribution watermark for video export compliance */
+  attributionText?: string;
 }
 
 /**
@@ -168,10 +170,32 @@ export function compositeRenderFrame(
     drawTechnicalHud(ctx, frame, width, height, insets);
   }
 
-  // 8. Draw Safe-Area Guides (if enabled for editor preview)
+  // 8. Draw Map & Terrain Legal Attribution Notice
+  if (options?.attributionText) {
+    drawAttributionNotice(ctx, options.attributionText, width, height, insets);
+  }
+
+  // 9. Draw Safe-Area Guides (if enabled for editor preview)
   if (options?.drawSafeAreaGuides) {
     drawSafeAreaGuides(ctx, width, height, insets, aspectRatio);
   }
+}
+
+function drawAttributionNotice(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  width: number,
+  height: number,
+  insets: SafeAreaInsets
+): void {
+  ctx.save();
+  ctx.font = '500 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+  ctx.textAlign = 'right';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+  ctx.shadowBlur = 4;
+  ctx.fillText(text, width - insets.right - 8, height - insets.bottom + 12);
+  ctx.restore();
 }
 
 function drawFallbackBackground(

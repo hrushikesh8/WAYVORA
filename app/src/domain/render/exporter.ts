@@ -367,6 +367,7 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
         mapCanvas,
         cinematicTreatment: config.cinematicTreatment,
         drawSafeAreaGuides: config.drawSafeAreaGuides,
+        attributionText: config.attributionText,
       });
 
       // Encode video frame
@@ -579,6 +580,7 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
         mapCanvas,
         cinematicTreatment: config.cinematicTreatment,
         drawSafeAreaGuides: config.drawSafeAreaGuides,
+        attributionText: config.attributionText,
       });
 
       // Frame interval wait for real-time stream capture

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Map, Marker, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
+import { Map, Marker, setWorkerUrl } from 'maplibre-gl';
 import maplibreglWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -92,6 +92,17 @@ import {
   applyJourneyTemplate,
   type JourneyTemplateId,
 } from './domain/templates';
+import {
+  MAP_STYLES,
+  MAP_STYLE_IDS,
+  DEFAULT_MAP_STYLE_ID,
+  type MapStyleId,
+  getStyleAttribution,
+  attachJourneyMapLayers,
+  syncRouteSourceData,
+  syncSegmentPointsData,
+  configureMapTerrain,
+} from './domain/map';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -190,10 +201,26 @@ export default function App() {
   const [pendingRoute, setPendingRoute] = useState<{ segmentId: string; result: RouteResult } | null>(null);
   const [routingError, setRoutingError] = useState<string | null>(null);
 
-  // 3D Terrain State
+  // Map Style & 3D Terrain State
+  const [currentMapStyle, setCurrentMapStyle] = useState<MapStyleId>(DEFAULT_MAP_STYLE_ID);
   const [isTerrain3dEnabled, setIsTerrain3dEnabled] = useState(true);
   const [terrainExaggeration, setTerrainExaggeration] = useState(1.2);
   const [terrainStatus, setTerrainStatus] = useState<'ready' | 'fallback' | 'disabled'>('ready');
+
+  // Mutable refs keeping map event handlers synchronized with latest React state
+  const currentMapStyleRef = useRef<MapStyleId>(DEFAULT_MAP_STYLE_ID);
+  const isTerrain3dEnabledRef = useRef<boolean>(isTerrain3dEnabled);
+  const terrainExaggerationRef = useRef<number>(terrainExaggeration);
+  const journeyRef = useRef<Journey>(journey);
+  const selectedSegmentIdRef = useRef<string | null>(selectedSegmentId);
+  const selectedPointIndexRef = useRef<number | null>(selectedPointIndex);
+
+  currentMapStyleRef.current = currentMapStyle;
+  isTerrain3dEnabledRef.current = isTerrain3dEnabled;
+  terrainExaggerationRef.current = terrainExaggeration;
+  journeyRef.current = journey;
+  selectedSegmentIdRef.current = selectedSegmentId;
+  selectedPointIndexRef.current = selectedPointIndex;
 
   // Cinematic Camera & Keyframe State
   const [isKeyframeTrackActive, setIsKeyframeTrackActive] = useState<boolean>(() => {
@@ -269,15 +296,35 @@ export default function App() {
   };
 
 
+  // Switch Map Basemap Style
+  const handleStyleChange = (newStyleId: MapStyleId) => {
+    setCurrentMapStyle(newStyleId);
+    currentMapStyleRef.current = newStyleId;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const styleDef = MAP_STYLES[newStyleId];
+    if (!styleDef) return;
+
+    try {
+      map.setStyle(styleDef.styleUrlOrSpec as any, { diff: false });
+      showNotification(`Map style: ${styleDef.name}`);
+    } catch (err) {
+      console.warn('Failed to switch map style, falling back to cinematic:', err);
+      showNotification(`Failed to load style: ${styleDef.name}`);
+      map.setStyle(MAP_STYLES.cinematic.styleUrlOrSpec as any, { diff: false });
+      setCurrentMapStyle('cinematic');
+      currentMapStyleRef.current = 'cinematic';
+    }
+  };
+
   // Initialize MapLibre
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    // Use OpenFreeMap Dark style (free, open, no API key, no watermark)
-    // with graceful fallback if offline
+    const initialStyleDef = MAP_STYLES[currentMapStyleRef.current] || MAP_STYLES.cinematic;
     const map = new Map({
       container: mapContainerRef.current,
-      style: 'https://tiles.openfreemap.org/styles/dark',
+      style: initialStyleDef.styleUrlOrSpec as any,
       center: [allPoints[0]?.lng ?? 8.5417, allPoints[0]?.lat ?? 47.3769],
       zoom: 10,
       pitch: 45,
@@ -303,115 +350,44 @@ export default function App() {
       .addTo(map);
     markerRef.current = marker;
 
-    map.on('load', () => {
-      // Add Route Line Source
-      map.addSource('route-source', {
-        type: 'geojson',
-        data: {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: allPoints.map(p => [p.lng, p.lat]),
-          },
-        },
-      });
-
-      // Route Glow Layer
-      map.addLayer({
-        id: 'route-glow',
-        type: 'line',
-        source: 'route-source',
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': '#00f2fe',
-          'line-width': 8,
-          'line-opacity': 0.35,
-          'line-blur': 4,
-        },
-      });
-
-      // Route Main Line
-      map.addLayer({
-        id: 'route-line',
-        type: 'line',
-        source: 'route-source',
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': '#4facfe',
-          'line-width': 3.5,
-          'line-opacity': 0.95,
-        },
-      });
-
-      // Editable segment points source
-      map.addSource('segment-points-source', {
-        type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features: [],
-        },
-      });
-
-      // Segment points layer
-      map.addLayer({
-        id: 'segment-points-layer',
-        type: 'circle',
-        source: 'segment-points-source',
-        paint: {
-          'circle-radius': [
-            'case',
-            ['boolean', ['get', 'selected'], false],
-            8,
-            5,
-          ],
-          'circle-color': [
-            'case',
-            ['boolean', ['get', 'selected'], false],
-            '#00f2fe',
-            '#fbbf24',
-          ],
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#0d1117',
-        },
-      });
-
-      map.on('click', 'segment-points-layer', (e) => {
-        if (e.features && e.features.length > 0) {
-          const ptIdx = e.features[0].properties?.pointIndex;
+    // Map-level resilient click listener for segment vertices
+    map.on('click', (e) => {
+      try {
+        if (!map.getLayer('segment-points-layer')) return;
+        const features = map.queryRenderedFeatures(e.point, { layers: ['segment-points-layer'] });
+        if (features && features.length > 0) {
+          const ptIdx = features[0].properties?.pointIndex;
           if (typeof ptIdx === 'number') {
             setSelectedPointIndex(ptIdx);
           }
         }
-      });
-      map.on('mouseenter', 'segment-points-layer', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'segment-points-layer', () => {
-        map.getCanvas().style.cursor = '';
-      });
-
-      // Add AWS Open Data Terrarium 3D Terrain Source
-      try {
-        map.addSource('terrain-source', {
-          type: 'raster-dem',
-          tiles: [
-            'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
-          ],
-          tileSize: 256,
-          encoding: 'terrarium',
-          maxzoom: 15,
-        });
-
-        if (isTerrain3dEnabled) {
-          map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration });
-        }
-      } catch (err: unknown) {
-        console.warn('MapLibre 3D terrain initialization warning:', err);
+      } catch {
+        // Ignore
       }
+    });
 
-      // Fit map to bounds
-      fitMapToBounds(map, allPoints);
+    map.on('mousemove', (e) => {
+      try {
+        if (!map.getLayer('segment-points-layer')) return;
+        const features = map.queryRenderedFeatures(e.point, { layers: ['segment-points-layer'] });
+        map.getCanvas().style.cursor = features && features.length > 0 ? 'pointer' : '';
+      } catch {
+        // Ignore
+      }
+    });
+
+    // Re-attach persistent layers whenever a style loads (both initial and on style switch)
+    map.on('style.load', () => {
+      const activeStyle = MAP_STYLES[currentMapStyleRef.current] || MAP_STYLES.cinematic;
+      attachJourneyMapLayers(map, journeyRef.current, {
+        terrainEnabled: isTerrain3dEnabledRef.current,
+        terrainExaggeration: terrainExaggerationRef.current,
+        supportsHillshade: activeStyle.supportsHillshade,
+        selectedSegmentId: selectedSegmentIdRef.current,
+        selectedPointIndex: selectedPointIndexRef.current,
+      });
+
+      fitMapToBounds(map, getAllPoints(journeyRef.current));
     });
 
     return () => {
@@ -426,37 +402,23 @@ export default function App() {
     if (!map || !map.isStyleLoaded()) return;
 
     try {
-      if (isTerrain3dEnabled && map.getSource('terrain-source')) {
-        map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration });
-        setTerrainStatus('ready');
-      } else {
-        map.setTerrain(null);
-        setTerrainStatus(isTerrain3dEnabled ? 'fallback' : 'disabled');
-      }
+      const style = MAP_STYLES[currentMapStyle] || MAP_STYLES.cinematic;
+      configureMapTerrain(map, isTerrain3dEnabled, terrainExaggeration, {
+        supportsHillshade: style.supportsHillshade,
+      });
+      setTerrainStatus(isTerrain3dEnabled ? 'ready' : 'disabled');
     } catch (err: unknown) {
       console.warn('MapLibre terrain update error, falling back to 2D:', err);
-      map.setTerrain(null);
       setTerrainStatus('fallback');
     }
-  }, [isTerrain3dEnabled, terrainExaggeration]);
+  }, [isTerrain3dEnabled, terrainExaggeration, currentMapStyle]);
 
   // Update Route geometry when journey changes
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !map.isStyleLoaded()) return;
 
-    const source = map.getSource('route-source') as GeoJSONSource | undefined;
-    if (source) {
-      source.setData({
-        type: 'Feature',
-        properties: {},
-        geometry: {
-          type: 'LineString',
-          coordinates: allPoints.map((p) => [p.lng, p.lat]),
-        },
-      });
-    }
-
+    syncRouteSourceData(map, allPoints);
     fitMapToBounds(map, allPoints);
   }, [allPoints]);
 
@@ -477,36 +439,8 @@ export default function App() {
     const map = mapInstanceRef.current;
     if (!map || !map.isStyleLoaded()) return;
 
-    const source = map.getSource('segment-points-source') as GeoJSONSource | undefined;
-    if (!source) return;
-
-    if (!selectedSegmentId) {
-      source.setData({ type: 'FeatureCollection', features: [] });
-      return;
-    }
-
-    const seg = journey.segments.find((s) => s.id === selectedSegmentId);
-    if (!seg) {
-      source.setData({ type: 'FeatureCollection', features: [] });
-      return;
-    }
-
-    const features = seg.points.map((pt, idx) => ({
-      type: 'Feature' as const,
-      properties: {
-        pointIndex: idx,
-        selected: selectedPointIndex === idx,
-      },
-      geometry: {
-        type: 'Point' as const,
-        coordinates: [pt.lng, pt.lat],
-      },
-    }));
-
-    source.setData({
-      type: 'FeatureCollection',
-      features,
-    });
+    const seg = journey.segments.find((s) => s.id === selectedSegmentId) ?? null;
+    syncSegmentPointsData(map, seg, selectedPointIndex);
   }, [selectedSegmentId, selectedPointIndex, journey]);
 
   // Sync Marker & Camera on frame update
@@ -975,68 +909,75 @@ export default function App() {
   };
 
   // Video Export Profiles and Dispatchers
-  const exportProfiles: ExportJobConfig[] = useMemo(() => [
-    {
-      profileName: 'YouTube 1080p',
-      width: 1920,
-      height: 1080,
-      fps: exportFps,
-      bitrateMbps: 8,
-      codec: 'h264',
-      aspectRatio: '16:9',
-      cinematicTreatment: {
-        vignette: exportVignette,
-        colorGrade: exportColorGrade,
-        contrastBoost: 0.15,
+  const exportProfiles: ExportJobConfig[] = useMemo(() => {
+    const activeAttribution = getStyleAttribution(currentMapStyle, isTerrain3dEnabled);
+    return [
+      {
+        profileName: 'YouTube 1080p',
+        width: 1920,
+        height: 1080,
+        fps: exportFps,
+        bitrateMbps: 8,
+        codec: 'h264',
+        aspectRatio: '16:9',
+        cinematicTreatment: {
+          vignette: exportVignette,
+          colorGrade: exportColorGrade,
+          contrastBoost: 0.15,
+        },
+        drawSafeAreaGuides: exportSafeGuides,
+        attributionText: activeAttribution,
       },
-      drawSafeAreaGuides: exportSafeGuides,
-    },
-    {
-      profileName: 'TikTok / Reels 9:16',
-      width: 1080,
-      height: 1920,
-      fps: exportFps,
-      bitrateMbps: 6,
-      codec: 'h264',
-      aspectRatio: '9:16',
-      cinematicTreatment: {
-        vignette: exportVignette,
-        colorGrade: exportColorGrade,
-        contrastBoost: 0.20,
+      {
+        profileName: 'TikTok / Reels 9:16',
+        width: 1080,
+        height: 1920,
+        fps: exportFps,
+        bitrateMbps: 6,
+        codec: 'h264',
+        aspectRatio: '9:16',
+        cinematicTreatment: {
+          vignette: exportVignette,
+          colorGrade: exportColorGrade,
+          contrastBoost: 0.20,
+        },
+        drawSafeAreaGuides: exportSafeGuides,
+        attributionText: activeAttribution,
       },
-      drawSafeAreaGuides: exportSafeGuides,
-    },
-    {
-      profileName: 'Instagram Square 1:1',
-      width: 1080,
-      height: 1080,
-      fps: exportFps,
-      bitrateMbps: 6,
-      codec: 'h264',
-      aspectRatio: '1:1',
-      cinematicTreatment: {
-        vignette: exportVignette,
-        colorGrade: exportColorGrade,
-        contrastBoost: 0.15,
+      {
+        profileName: 'Instagram Square 1:1',
+        width: 1080,
+        height: 1080,
+        fps: exportFps,
+        bitrateMbps: 6,
+        codec: 'h264',
+        aspectRatio: '1:1',
+        cinematicTreatment: {
+          vignette: exportVignette,
+          colorGrade: exportColorGrade,
+          contrastBoost: 0.15,
+        },
+        drawSafeAreaGuides: exportSafeGuides,
+        attributionText: activeAttribution,
       },
-      drawSafeAreaGuides: exportSafeGuides,
-    },
-    {
-      profileName: 'Fast Draft 720p',
-      width: 1280,
-      height: 720,
-      fps: exportFps,
-      bitrateMbps: 4,
-      codec: 'h264',
-      aspectRatio: '16:9',
-      cinematicTreatment: {
-        vignette: exportVignette,
-        colorGrade: exportColorGrade,
-        contrastBoost: 0.10,
+      {
+        profileName: 'Fast Draft 720p',
+        width: 1280,
+        height: 720,
+        fps: exportFps,
+        bitrateMbps: 4,
+        codec: 'h264',
+        aspectRatio: '16:9',
+        cinematicTreatment: {
+          vignette: exportVignette,
+          colorGrade: exportColorGrade,
+          contrastBoost: 0.10,
+        },
+        drawSafeAreaGuides: exportSafeGuides,
+        attributionText: activeAttribution,
       },
-      drawSafeAreaGuides: exportSafeGuides,
-    },
-  ], [exportFps, exportVignette, exportColorGrade, exportSafeGuides]);
+    ];
+  }, [exportFps, exportVignette, exportColorGrade, exportSafeGuides, currentMapStyle, isTerrain3dEnabled]);
 
   const handleApplyTemplate = (templateId: JourneyTemplateId) => {
     const template = JOURNEY_TEMPLATES.find((t) => t.id === templateId);
@@ -1464,6 +1405,7 @@ export default function App() {
             className="journey-selector"
             value={selectedPreset}
             onChange={(e) => handleSelectPreset(e.target.value)}
+            title="Journey Route Preset"
           >
             {PRESET_JOURNEYS.map((p) => (
               <option key={p.id} value={p.id}>
@@ -1473,6 +1415,19 @@ export default function App() {
             {selectedPreset === 'custom' && (
               <option value="custom">★ Imported GPX Journey</option>
             )}
+          </select>
+
+          <select
+            className="journey-selector"
+            value={currentMapStyle}
+            onChange={(e) => handleStyleChange(e.target.value as MapStyleId)}
+            title="Map Basemap Style"
+          >
+            {MAP_STYLE_IDS.map((styleId) => (
+              <option key={styleId} value={styleId}>
+                🗺 {MAP_STYLES[styleId].name}
+              </option>
+            ))}
           </select>
 
           {isSaved ? (
@@ -2768,6 +2723,11 @@ export default function App() {
               </svg>
             </div>
           )}
+
+          {/* Map Attribution Notice */}
+          <div className="map-attribution-overlay" title={getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}>
+            {getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}
+          </div>
         </div>
 
         {/* Right Inspector: Camera & Visual Director */}
@@ -3156,14 +3116,39 @@ export default function App() {
             </div>
           </div>
 
-          {/* 3D Terrain & Relief Director */}
+          {/* Basemap & 3D Terrain Director */}
           <div className="control-group">
             <div className="control-header">
-              <span>3D Terrain & Relief</span>
+              <span>Basemap & 3D Terrain</span>
               <span style={{ fontSize: '10px', color: isTerrain3dEnabled ? '#34d399' : 'var(--text-muted)' }}>
                 {isTerrain3dEnabled ? (terrainStatus === 'fallback' ? 'Flat Fallback' : 'Active 3D') : 'Disabled'}
               </span>
             </div>
+
+            {/* Map Style Selector Buttons */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+                Map Style
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+                {MAP_STYLE_IDS.map((styleId) => {
+                  const s = MAP_STYLES[styleId];
+                  const isActive = currentMapStyle === styleId;
+                  return (
+                    <button
+                      key={styleId}
+                      className={`btn-ghost ${isActive ? 'active' : ''}`}
+                      style={{ fontSize: '11px', padding: '5px 6px', justifyContent: 'center', textAlign: 'center' }}
+                      onClick={() => handleStyleChange(styleId)}
+                      title={s.description}
+                    >
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
               <button
                 className={`btn-ghost ${isTerrain3dEnabled ? 'active' : ''}`}
@@ -3193,8 +3178,8 @@ export default function App() {
                 />
               </div>
             )}
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Source: AWS Open Data Terrarium DEM
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4' }}>
+              <strong style={{ color: 'var(--text-secondary)' }}>Attribution:</strong> {getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}
             </div>
           </div>
 
