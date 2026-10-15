@@ -267,6 +267,44 @@ Define a clean, provider-independent `RoutingAdapter` interface with typed `Rout
 - `mp4-muxer` provides a tiny (~15KB) zero-dependency, MIT-licensed muxer that writes valid MP4 containers with correct duration headers.
 - Fixed-step frame scheduling eliminates dropped frames and playback lag during video generation.
 
+---
+
+## ADR-013: Deterministic Audio Timeline, Float32Array PCM Mixing, and WebCodecs AAC Muxing
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**:
+WAYVORA's video export pipeline (Phase 7) produced mute H.264 MP4 videos. Travel films demand synchronized background scores, ambient soundscapes, and narration/voiceover tracks. Browser Web Audio API nodes (`AudioContext`, `GainNode`, etc.) are coupled to wall-clock time and real-time playback, which makes them unsuitable for deterministic, faster-than-realtime, or frame-by-frame offline export. Furthermore, storing raw binary audio inside `.wayvora.json` projects would cause massive serialization bloat and file corruption.
+
+**Decision**:
+1. **Typed Audio Domain & Serialization (`app/src/domain/audio/types.ts`, `app/src/domain/types.ts`, `serialization.ts`)**:
+   - Introduce `AudioClip` with properties: `id`, `name`, `assetRef` (URI or synth identifier), `trackId` ('music' | 'narration' | 'sfx'), `timelineStart`, `duration`, `sourceOffset` (trim-in), `volume` (gain), `fadeIn`, and `fadeOut`.
+   - Organize into `AudioTrack` and `AudioTimeline` with independent track volumes and master volume.
+   - **Serialization Integrity**: `.wayvora.json` stores only clip metadata, timing parameters, and asset URI references. Zero binary PCM or base64 audio data is stored in the JSON project file. Existing projects automatically gain a default audio timeline structure upon loading via `migrateProject`.
+   - Fully integrated into editor immutable history (`pushEditorHistory`) supporting undo/redo for all audio additions, modifications, and track level adjustments.
+
+2. **Deterministic Offline PCM Mixer & Synthesis (`app/src/domain/audio/mixer.ts`)**:
+   - Calculate sample-accurate gain using smooth sinusoidal S-curve fade curves:
+     $$\text{fadeIn: } \sin\left(\frac{\pi}{2} \cdot \frac{t - \text{start}}{\text{fadeIn}}\right), \quad \text{fadeOut: } \cos\left(\frac{\pi}{2} \cdot \frac{t - (\text{end} - \text{fadeOut})}{\text{fadeOut}}\right)$$
+   - Pure Float32Array stereo PCM buffer evaluation $(L, R)$ at 44.1 kHz, completely decoupled from hardware clocks or browser audio drivers.
+   - **Clipping Prevention**: Implement a smooth soft-knee limiter using hyperbolic tangent compression:
+     $$\text{sample}' = \tanh(\text{sample}) \quad \text{when } |\text{sample}| > 0.95$$
+     preventing digital clipping distortion while preserving dynamic range.
+   - **Zero-Dependency Ambient Synthesis & Preview**: Built-in procedural harmonic tone generator (`synthesizeAudioTone`, A-major triad with natural envelope) and in-memory 16-bit stereo WAV encoder (`pcmToWavBlob`), enabling preview and export without external audio files.
+
+3. **WebCodecs Hardware AAC Audio Encoding (`app/src/domain/render/exporter.ts`)**:
+   - Instantiate WebCodecs `AudioEncoder` with `mp4a.40.2` (AAC-LC, 44.1 kHz, 128 kbps stereo).
+   - Configure `mp4-muxer` with `{ codec: 'aac', sampleRate: 44100, numberOfChannels: 2 }` and `firstTimestampBehavior: 'cross-track-offset'` for synchronized AV track alignment.
+   - Chunk mixed Float32Array PCM into 1024-frame planar buffers (`f32-planar`) with microsecond presentation timestamps ($t_{\mu s} = \text{round}(i \cdot 10^6 / 44100)$) matching video PTS bounds.
+   - Provide graceful fallback to video-only export when no audio clips are active or WebCodecs audio encoding is not supported.
+
+**Rationale**:
+- Pure Float32Array PCM mixing is 100% deterministic, testable in node/vitest without browser mocks, and immune to audio driver latency jitter.
+- WebCodecs `AudioEncoder` encodes AAC in hardware/native browser threads in a fraction of real time.
+- Standard AAC in MP4 containers ensures universal playback compatibility across Apple QuickTime, Windows Media Player, iOS Safari, Android Chrome, and YouTube.
+
+
 
 
 

@@ -755,4 +755,164 @@ export function removeMedia(journey: Journey, mediaId: string): Journey {
   };
 }
 
+// ── Audio Timeline Operations ──
+
+import type { AudioClip } from './audio/types';
+import { createDefaultAudioTimeline, validateAudioClip } from './audio/mixer';
+
+/**
+ * Adds an audio clip to a designated track in the journey audio timeline.
+ */
+export function addAudioClip(journey: Journey, trackId: string, clip: AudioClip): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const tracks = [...(audio.tracks || [])];
+  const trackIndex = tracks.findIndex((t) => t.id === trackId);
+
+  if (trackIndex === -1) {
+    throw new EditError(`Audio track not found with id: ${trackId}`);
+  }
+
+  const duration = journey.timeline.duration || 60;
+  const validationErrors = validateAudioClip(clip, duration);
+  if (validationErrors.length > 0) {
+    throw new EditError(`Invalid audio clip: ${validationErrors.join(', ')}`);
+  }
+
+  const targetTrack = tracks[trackIndex];
+  const updatedClips = [...targetTrack.clips, clip].sort(
+    (a, b) => a.timelineStartSeconds - b.timelineStartSeconds
+  );
+
+  tracks[trackIndex] = {
+    ...targetTrack,
+    clips: updatedClips,
+  };
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      tracks,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates an existing audio clip across any track in the journey audio timeline.
+ */
+export function updateAudioClip(
+  journey: Journey,
+  clipId: string,
+  updates: Partial<AudioClip>
+): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const tracks = [...(audio.tracks || [])];
+  let found = false;
+
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    const clipIndex = track.clips.findIndex((c) => c.id === clipId);
+    if (clipIndex !== -1) {
+      found = true;
+      const updatedClip = { ...track.clips[clipIndex], ...updates };
+      const duration = journey.timeline.duration || 60;
+      const validationErrors = validateAudioClip(updatedClip, duration);
+      if (validationErrors.length > 0) {
+        throw new EditError(`Invalid audio clip updates: ${validationErrors.join(', ')}`);
+      }
+
+      const updatedClips = [...track.clips];
+      updatedClips[clipIndex] = updatedClip;
+      updatedClips.sort((a, b) => a.timelineStartSeconds - b.timelineStartSeconds);
+
+      tracks[i] = {
+        ...track,
+        clips: updatedClips,
+      };
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new EditError(`Audio clip not found with id: ${clipId}`);
+  }
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      tracks,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Deletes an audio clip from whichever track contains it.
+ */
+export function deleteAudioClip(journey: Journey, clipId: string): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const tracks = (audio.tracks || []).map((t) => ({
+    ...t,
+    clips: t.clips.filter((c) => c.id !== clipId),
+  }));
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      tracks,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates an audio track volume and mute state.
+ */
+export function setAudioTrackVolume(
+  journey: Journey,
+  trackId: string,
+  volume: number,
+  muted?: boolean
+): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const tracks = (audio.tracks || []).map((t) => {
+    if (t.id === trackId) {
+      return {
+        ...t,
+        volume: Math.max(0, Math.min(2.0, volume)),
+        ...(muted != null ? { muted } : {}),
+      };
+    }
+    return t;
+  });
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      tracks,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Sets master audio output volume.
+ */
+export function setMasterAudioVolume(journey: Journey, volume: number): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      masterVolume: Math.max(0, Math.min(2.0, volume)),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+
 

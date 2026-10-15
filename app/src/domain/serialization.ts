@@ -61,6 +61,8 @@ export function deserializeProject(json: string): Journey {
   return journey;
 }
 
+import { createDefaultAudioTimeline } from './audio/mixer';
+
 /**
  * Migrate a project from an older version to the current version.
  * Currently only v1 exists, so this is a no-op placeholder.
@@ -84,6 +86,18 @@ function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
         } as any;
       });
     }
+
+    if (!journey.audio) {
+      journey.audio = createDefaultAudioTimeline();
+    } else {
+      journey.audio = {
+        masterVolume: journey.audio.masterVolume ?? 1.0,
+        sampleRate: journey.audio.sampleRate ?? 44100,
+        channelCount: journey.audio.channelCount ?? 2,
+        tracks: Array.isArray(journey.audio.tracks) ? journey.audio.tracks : [],
+      };
+    }
+
     return journey;
   }
   throw new DeserializationError(`Unknown project version: ${fromVersion}`);

@@ -35,8 +35,18 @@ import {
   attachMediaToScene,
   attachMediaToStop,
   removeMedia,
+  addAudioClip,
+  updateAudioClip,
+  deleteAudioClip,
+  setAudioTrackVolume,
+  setMasterAudioVolume,
   type EditorHistory,
 } from './domain/editor';
+import {
+  type AudioClip,
+  synthesizeAudioTone,
+  pcmToWavBlob,
+} from './domain/audio';
 import {
   type StoryScene,
   type SceneIntent,
@@ -126,8 +136,14 @@ export default function App() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('overview');
   const [mapPitch, setMapPitch] = useState(45);
   const [mapZoom, setMapZoom] = useState(11);
-  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'stats' | 'export'>('stops');
+  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'audio' | 'stats' | 'export'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
+
+  // Audio Timeline State & Refs
+  const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const targetTrackIdForAudio = useRef<string | null>(null);
+  const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingClipId, setPreviewingClipId] = useState<string | null>(null);
 
   // Video Export State
   const [selectedExportProfileIndex, setSelectedExportProfileIndex] = useState(0);
@@ -822,6 +838,117 @@ export default function App() {
     applyJourneyEdit(updated, 'Media removed');
   };
 
+  // Audio Timeline Handlers
+  const handleAddSyntheticScore = (trackId: string) => {
+    const dur = Math.min(30, Math.max(10, Math.round(effectiveDuration)));
+    const synth = synthesizeAudioTone({
+      durationSeconds: dur,
+      sampleRate: 44100,
+      frequencyHz: 220,
+      style: 'ambient-chord',
+    });
+    const wavBlob = pcmToWavBlob(synth.left, synth.right, 44100);
+    const blobUrl = URL.createObjectURL(wavBlob);
+    const newClip: AudioClip = {
+      id: `audio-clip-${Date.now()}`,
+      name: 'Alpine Ambient Score',
+      type: 'music',
+      assetUrl: blobUrl,
+      timelineStartSeconds: 0,
+      sourceTrimInSeconds: 0,
+      durationSeconds: dur,
+      volume: 0.85,
+      fadeInSeconds: 2.0,
+      fadeOutSeconds: 3.0,
+      metadata: {
+        artist: 'WAYVORA Sound Engine',
+        title: 'Alpine Ambient Triad (A Major)',
+        provenance: 'Procedural PCM Synthesis',
+      },
+    };
+    const updated = addAudioClip(journey, trackId, newClip);
+    applyJourneyEdit(updated, `Generated Ambient Score (${dur}s)`);
+  };
+
+  const handleSelectAudioFile = (trackId: string) => {
+    targetTrackIdForAudio.current = trackId;
+    audioFileInputRef.current?.click();
+  };
+
+  const handleAudioFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const trackId = targetTrackIdForAudio.current;
+    if (!file || !trackId) return;
+    const blobUrl = URL.createObjectURL(file);
+    const track = journey.audio?.tracks.find((t) => t.id === trackId);
+    const newClip: AudioClip = {
+      id: `audio-clip-${Date.now()}`,
+      name: file.name.replace(/\.[^/.]+$/, ''),
+      filename: file.name,
+      type: track?.type || 'music',
+      assetUrl: blobUrl,
+      timelineStartSeconds: 0,
+      sourceTrimInSeconds: 0,
+      durationSeconds: Math.min(60, Math.round(effectiveDuration)),
+      volume: 1.0,
+      fadeInSeconds: 1.0,
+      fadeOutSeconds: 1.0,
+      metadata: {
+        title: file.name,
+        provenance: 'User Audio File',
+      },
+    };
+    const updated = addAudioClip(journey, trackId, newClip);
+    applyJourneyEdit(updated, `Added audio track: ${file.name}`);
+    e.target.value = '';
+  };
+
+  const handleUpdateAudioClip = (clipId: string, updates: Partial<AudioClip>) => {
+    try {
+      const updated = updateAudioClip(journey, clipId, updates);
+      applyJourneyEdit(updated);
+    } catch (err: unknown) {
+      console.warn('Update audio clip error:', err);
+    }
+  };
+
+  const handleDeleteAudioClip = (clipId: string) => {
+    if (previewingClipId === clipId && audioPreviewRef.current) {
+      audioPreviewRef.current.pause();
+      setPreviewingClipId(null);
+    }
+    const updated = deleteAudioClip(journey, clipId);
+    applyJourneyEdit(updated, 'Removed audio clip');
+  };
+
+  const handleTogglePreviewClip = (clip: AudioClip) => {
+    if (previewingClipId === clip.id) {
+      if (audioPreviewRef.current) {
+        audioPreviewRef.current.pause();
+      }
+      setPreviewingClipId(null);
+      return;
+    }
+    if (audioPreviewRef.current) {
+      audioPreviewRef.current.src = clip.assetUrl;
+      audioPreviewRef.current.currentTime = clip.sourceTrimInSeconds;
+      audioPreviewRef.current.volume = Math.max(0, Math.min(1, clip.volume));
+      audioPreviewRef.current.play().catch(() => {});
+      setPreviewingClipId(clip.id);
+      audioPreviewRef.current.onended = () => setPreviewingClipId(null);
+    }
+  };
+
+  const handleSetMasterAudioVolume = (vol: number) => {
+    const updated = setMasterAudioVolume(journey, vol);
+    applyJourneyEdit(updated);
+  };
+
+  const handleSetAudioTrackVolume = (trackId: string, vol: number, muted?: boolean) => {
+    const updated = setAudioTrackVolume(journey, trackId, vol, muted);
+    applyJourneyEdit(updated);
+  };
+
   // Video Export Profiles and Dispatchers
   const exportProfiles: ExportJobConfig[] = useMemo(() => [
     {
@@ -1371,6 +1498,12 @@ export default function App() {
               Story ({journey.timeline.scenes?.length ?? 0})
             </button>
             <button
+              className={`tab-btn ${activeTab === 'audio' ? 'active' : ''}`}
+              onClick={() => setActiveTab('audio')}
+            >
+              🎵 Audio ({journey.audio?.tracks.reduce((acc, t) => acc + t.clips.length, 0) ?? 0})
+            </button>
+            <button
               className={`tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
               onClick={() => setActiveTab('stats')}
             >
@@ -1890,6 +2023,218 @@ export default function App() {
               </div>
             )}
 
+            {activeTab === 'audio' && (
+              <div className="audio-panel">
+                <div className="section-label">
+                  <span>Audio Timeline & Sound Director</span>
+                </div>
+
+                {/* Master Volume */}
+                <div className="audio-track-card" style={{ background: 'rgba(0, 242, 254, 0.05)', borderColor: 'rgba(0, 242, 254, 0.25)' }}>
+                  <div className="audio-track-header">
+                    <span className="audio-track-title">🔊 Master Output Volume</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--accent-cyan)' }}>
+                      {Math.round((journey.audio?.masterVolume ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1.5"
+                    step="0.05"
+                    value={journey.audio?.masterVolume ?? 1.0}
+                    onChange={(e) => handleSetMasterAudioVolume(Number(e.target.value))}
+                  />
+                </div>
+
+                {/* Audio Tracks */}
+                {(!journey.audio?.tracks || journey.audio.tracks.length === 0) ? (
+                  <div className="audio-empty-msg">No audio tracks available.</div>
+                ) : (
+                  journey.audio.tracks.map((track) => (
+                    <div key={track.id} className="audio-track-card">
+                      <div className="audio-track-header">
+                        <span className="audio-track-title">
+                          {track.type === 'music' ? '🎵' : '🎙️'} {track.name}
+                        </span>
+                        <div className="audio-track-controls">
+                          <button
+                            className="btn-ghost"
+                            style={{ padding: '2px 6px', fontSize: '10px', color: track.muted ? '#f87171' : 'var(--text-muted)' }}
+                            onClick={() => handleSetAudioTrackVolume(track.id, track.volume, !track.muted)}
+                            title={track.muted ? 'Unmute Track' : 'Mute Track'}
+                          >
+                            {track.muted ? '🔇 MUTED' : '🔊'}
+                          </button>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-muted)' }}>
+                            {Math.round(track.volume * 100)}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Track Volume Slider */}
+                      <input
+                        type="range"
+                        min="0"
+                        max="1.5"
+                        step="0.05"
+                        value={track.volume}
+                        disabled={track.muted}
+                        onChange={(e) => handleSetAudioTrackVolume(track.id, Number(e.target.value))}
+                      />
+
+                      {/* Track Action Buttons */}
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        {track.type === 'music' && (
+                          <button
+                            className="btn-ghost"
+                            style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
+                            onClick={() => handleAddSyntheticScore(track.id)}
+                            title="Generate a procedural ambient triad chord score"
+                          >
+                            ✨ Ambient Score
+                          </button>
+                        )}
+                        <button
+                          className="btn-ghost"
+                          style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
+                          onClick={() => handleSelectAudioFile(track.id)}
+                          title="Import audio file (.mp3, .wav, .ogg, .m4a)"
+                        >
+                          📁 Add File
+                        </button>
+                      </div>
+
+                      {/* Clips List */}
+                      {track.clips.length === 0 ? (
+                        <div className="audio-empty-msg">No clips in this track.</div>
+                      ) : (
+                        track.clips.map((clip) => {
+                          const isPreviewing = previewingClipId === clip.id;
+                          return (
+                            <div key={clip.id} className={`audio-clip-card ${isPreviewing ? 'previewing' : ''}`}>
+                              <div className="audio-clip-header">
+                                <span className="audio-clip-name" title={clip.name}>
+                                  {clip.name}
+                                </span>
+                                <span className={`audio-badge ${clip.type}`}>
+                                  {clip.type}
+                                </span>
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                  <button
+                                    className="btn-ghost"
+                                    style={{
+                                      padding: '2px 6px',
+                                      fontSize: '10px',
+                                      color: isPreviewing ? 'var(--accent-cyan)' : 'inherit',
+                                    }}
+                                    onClick={() => handleTogglePreviewClip(clip)}
+                                    title="Preview clip audio"
+                                  >
+                                    {isPreviewing ? '⏸' : '▶'}
+                                  </button>
+                                  <button
+                                    className="btn-ghost"
+                                    style={{ padding: '2px 5px', fontSize: '10px', color: '#f87171' }}
+                                    onClick={() => handleDeleteAudioClip(clip.id)}
+                                    title="Delete clip"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Timeline & Trim Inputs */}
+                              <div className="audio-clip-grid">
+                                <div className="audio-input-group">
+                                  <label>Start (s)</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    value={clip.timelineStartSeconds}
+                                    onChange={(e) => handleUpdateAudioClip(clip.id, { timelineStartSeconds: Math.max(0, Number(e.target.value)) })}
+                                  />
+                                </div>
+                                <div className="audio-input-group">
+                                  <label>Trim In (s)</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    value={clip.sourceTrimInSeconds}
+                                    onChange={(e) => handleUpdateAudioClip(clip.id, { sourceTrimInSeconds: Math.max(0, Number(e.target.value)) })}
+                                  />
+                                </div>
+                                <div className="audio-input-group">
+                                  <label>Duration (s)</label>
+                                  <input
+                                    type="number"
+                                    min="0.5"
+                                    step="0.5"
+                                    value={clip.durationSeconds}
+                                    onChange={(e) => handleUpdateAudioClip(clip.id, { durationSeconds: Math.max(0.5, Number(e.target.value)) })}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Volume Slider */}
+                              <div className="audio-slider-row">
+                                <div className="audio-slider-labels">
+                                  <span>Gain</span>
+                                  <span>{Math.round(clip.volume * 100)}%</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="1.5"
+                                  step="0.05"
+                                  value={clip.volume}
+                                  onChange={(e) => handleUpdateAudioClip(clip.id, { volume: Number(e.target.value) })}
+                                />
+                              </div>
+
+                              {/* Fades */}
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                <div className="audio-slider-row">
+                                  <div className="audio-slider-labels">
+                                    <span>Fade In</span>
+                                    <span>{clip.fadeInSeconds}s</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="5"
+                                    step="0.5"
+                                    value={clip.fadeInSeconds}
+                                    onChange={(e) => handleUpdateAudioClip(clip.id, { fadeInSeconds: Number(e.target.value) })}
+                                  />
+                                </div>
+                                <div className="audio-slider-row">
+                                  <div className="audio-slider-labels">
+                                    <span>Fade Out</span>
+                                    <span>{clip.fadeOutSeconds}s</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="5"
+                                    step="0.5"
+                                    value={clip.fadeOutSeconds}
+                                    onChange={(e) => handleUpdateAudioClip(clip.id, { fadeOutSeconds: Number(e.target.value) })}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
             {activeTab === 'export' && (
               <div className="export-panel">
                 <div className="section-label">
@@ -1950,6 +2295,23 @@ export default function App() {
                   <span>Encoder Engine:</span>
                   <span style={{ color: isWebCodecsSupported() ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
                     {isWebCodecsSupported() ? '✓ Hardware WebCodecs (MP4 H.264)' : '⚠ MediaRecorder (WebM Fallback)'}
+                  </span>
+                </div>
+
+                {/* Audiovisual Synchronization Status */}
+                <div style={{
+                  fontSize: '11px',
+                  padding: '8px',
+                  background: 'rgba(0,0,0,0.3)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span>Audiovisual Mode:</span>
+                  <span style={{ color: (journey.audio?.tracks.some(t => t.clips.length > 0)) ? '#38bdf8' : 'var(--text-muted)', fontWeight: 600 }}>
+                    {(journey.audio?.tracks.some(t => t.clips.length > 0)) ? '🎵 Synchronized AAC Audio' : '🎬 Video-Only (No Audio Clips)'}
                   </span>
                 </div>
 
@@ -2022,6 +2384,13 @@ export default function App() {
                         {(exportResult.sizeBytes / (1024 * 1024)).toFixed(2)} MB
                       </span>
                     </div>
+
+                    {exportResult.hasAudioTrack && (
+                      <div style={{ fontSize: '10px', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span>🎵</span>
+                        <span>Track: {exportResult.audioCodec?.toUpperCase()} · {exportResult.audioChannels === 2 ? 'Stereo' : 'Mono'} · {exportResult.audioSampleRate} Hz</span>
+                      </div>
+                    )}
 
                     <video
                       controls
@@ -2148,6 +2517,14 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleStopMediaSelected}
           />
+          <input
+            type="file"
+            ref={audioFileInputRef}
+            accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+            style={{ display: 'none' }}
+            onChange={handleAudioFileSelected}
+          />
+          <audio ref={audioPreviewRef} style={{ display: 'none' }} />
 
           {/* Map Top HUD */}
           <div className="map-hud-top">

@@ -248,6 +248,9 @@ export const DEFAULT_EXPORT_PROFILES: ExportProfile[] = [
   { name: 'Instagram Square', width: 1080, height: 1080, aspectRatio: '1:1', codec: 'h264', fps: 30, bitrate: 6 },
 ];
 
+import type { AudioTimeline } from './audio/types';
+export type { AudioTimeline };
+
 // ── Journey (root aggregate) ──
 
 export interface Journey {
@@ -260,6 +263,7 @@ export interface Journey {
   stops: Stop[];
   timeline: Timeline;
   exportProfiles: ExportProfile[];
+  audio?: AudioTimeline;
 }
 
 // ── Project file format ──

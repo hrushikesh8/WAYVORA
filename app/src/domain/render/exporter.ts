@@ -1,10 +1,10 @@
-/* ─── Video Exporter Pipeline ────────────────────────────────────────
-   Deterministic frame-by-frame rendering and offline video encoding.
-   Supports hardware WebCodecs VideoEncoder + mp4-muxer (primary H.264 MP4)
-   with MediaRecorder WebM fallback.
+/* ─── Video & Audio Exporter Pipeline ─────────────────────────────────
+   Deterministic frame-by-frame rendering and offline audiovisual encoding.
+   Supports hardware WebCodecs VideoEncoder + AudioEncoder + mp4-muxer
+   (primary H.264 MP4 with synchronized AAC audio) with MediaRecorder fallback.
    ─────────────────────────────────────────────────────────────────── */
 
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { Muxer, ArrayBufferTarget, type MuxerOptions } from 'mp4-muxer';
 import type { Journey } from '../types';
 import type {
   ExportJobConfig,
@@ -14,12 +14,22 @@ import type {
 } from './types';
 import { evaluateRenderFrame } from './contract';
 import { compositeRenderFrame } from './canvasCompositor';
+import { mixAudioPcm } from '../audio/mixer';
+import { prepareJourneyAudioBuffers } from '../audio/audioLoader';
 
 export function isWebCodecsSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
     typeof VideoEncoder !== 'undefined' &&
     typeof VideoFrame !== 'undefined'
+  );
+}
+
+export function isWebCodecsAudioSupported(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof AudioEncoder !== 'undefined' &&
+    typeof AudioData !== 'undefined'
   );
 }
 
@@ -62,6 +72,33 @@ async function findSupportedH264Codec(
   return null;
 }
 
+export async function findSupportedAacCodec(
+  sampleRate: number = 44100,
+  numberOfChannels: number = 2,
+  bitrateBps: number = 128_000
+): Promise<string | null> {
+  if (!isWebCodecsAudioSupported()) return null;
+
+  const candidateCodecs = ['mp4a.40.2', 'mp4a.40.02', 'mp4a.40.5'];
+  for (const codec of candidateCodecs) {
+    try {
+      const config: AudioEncoderConfig = {
+        codec,
+        sampleRate,
+        numberOfChannels,
+        bitrate: bitrateBps,
+      };
+      const support = await AudioEncoder.isConfigSupported(config);
+      if (support.supported) {
+        return codec;
+      }
+    } catch {
+      // Try next
+    }
+  }
+  return null;
+}
+
 export interface RenderExportOptions {
   config: ExportJobConfig;
   /** Optional callback to render map background for this frame */
@@ -73,7 +110,8 @@ export interface RenderExportOptions {
 }
 
 /**
- * Deterministically renders and encodes a journey into an MP4 or WebM video file.
+ * Deterministically renders and encodes a journey into an MP4 or WebM video file,
+ * multiplexing synchronized AAC audio where available.
  */
 export async function exportJourneyVideo(
   journey: Journey,
@@ -112,13 +150,13 @@ export async function exportJourneyVideo(
     phase: 'preparing',
     elapsedMs: 0,
     estimatedRemainingMs: 0,
-    message: 'Initializing video encoder...',
+    message: 'Preparing audiovisual encoders...',
   });
 
   // 3. Choose encoder: WebCodecs + mp4-muxer (Primary) or MediaRecorder (Fallback)
-  const chosenCodec = await findSupportedH264Codec(config.width, config.height, fps, bitrateBps);
+  const chosenVideoCodec = await findSupportedH264Codec(config.width, config.height, fps, bitrateBps);
 
-  if (isWebCodecsSupported() && chosenCodec) {
+  if (isWebCodecsSupported() && chosenVideoCodec) {
     return await renderWithWebCodecs({
       journey,
       config,
@@ -127,7 +165,7 @@ export async function exportJourneyVideo(
       fps,
       totalFrames,
       bitrateBps,
-      codec: chosenCodec,
+      codec: chosenVideoCodec,
       canvas,
       ctx,
       getMapCanvas,
@@ -190,8 +228,53 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
     startTimeMs,
   } = args;
 
-  const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
+  // 1. Determine audio eligibility and load buffers
+  const wantAudio = config.includeAudio !== false;
+  const audioBitrateBps = (config.audioBitrateKbps || 128) * 1000;
+  const sampleRate = journey.audio?.sampleRate || 44100;
+  const channelCount = 2;
+
+  let hasAudio = false;
+  let aacCodec: string | null = null;
+  let mixedAudio: { leftChannel: Float32Array; rightChannel: Float32Array } | null = null;
+
+  if (wantAudio && journey.audio && journey.audio.tracks && journey.audio.tracks.length > 0) {
+    const hasClips = journey.audio.tracks.some((t) => !t.muted && t.clips.some((c) => !c.muted));
+    if (hasClips) {
+      onProgress?.({
+        currentFrame: 0,
+        totalFrames,
+        percent: 1,
+        phase: 'preparing',
+        elapsedMs: Math.round(performance.now() - startTimeMs),
+        estimatedRemainingMs: 0,
+        message: 'Decoding and mixing audio tracks...',
+      });
+
+      try {
+        const sourceBuffers = await prepareJourneyAudioBuffers(journey);
+        if (sourceBuffers.size > 0) {
+          aacCodec = await findSupportedAacCodec(sampleRate, channelCount, audioBitrateBps);
+          if (aacCodec) {
+            mixedAudio = mixAudioPcm({
+              durationSeconds: duration,
+              sampleRate,
+              timeline: journey.audio,
+              sourceBuffers,
+            });
+            hasAudio = true;
+          }
+        }
+      } catch (audioErr) {
+        console.warn('Audio preparation warning; proceeding with video-only export:', audioErr);
+      }
+    }
+  }
+
+  // 2. Initialize MP4 Muxer with video (and optional audio) tracks
+  const muxerTarget = new ArrayBufferTarget();
+  const muxerOptions: MuxerOptions<ArrayBufferTarget> = {
+    target: muxerTarget,
     video: {
       codec: 'avc',
       width: config.width,
@@ -199,18 +282,29 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       frameRate: fps,
     },
     fastStart: 'in-memory',
-    firstTimestampBehavior: 'offset',
-  });
+    firstTimestampBehavior: hasAudio ? 'cross-track-offset' : 'offset',
+  };
 
+  if (hasAudio) {
+    muxerOptions.audio = {
+      codec: 'aac',
+      numberOfChannels: channelCount,
+      sampleRate,
+    };
+  }
+
+  const muxer = new Muxer(muxerOptions);
+
+  // 3. Initialize VideoEncoder
   let encoderError: Error | null = null;
-  const encoder = new VideoEncoder({
+  const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (err) => {
       encoderError = err;
     },
   });
 
-  encoder.configure({
+  videoEncoder.configure({
     codec,
     width: config.width,
     height: config.height,
@@ -220,16 +314,41 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
     avc: { format: 'avc' },
   });
 
+  // 4. Initialize AudioEncoder if audio track is active
+  let audioEncoder: AudioEncoder | null = null;
+  let audioEncoderError: Error | null = null;
+
+  if (hasAudio && aacCodec) {
+    audioEncoder = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: (err) => {
+        audioEncoderError = err;
+      },
+    });
+
+    audioEncoder.configure({
+      codec: aacCodec,
+      sampleRate,
+      numberOfChannels: channelCount,
+      bitrate: audioBitrateBps,
+    });
+  }
+
   const usPerFrame = 1e6 / fps;
 
   try {
+    // 5. Render and encode video frames
     for (let i = 0; i < totalFrames; i++) {
       if (abortSignal?.aborted) {
-        encoder.close();
+        videoEncoder.close();
+        if (audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close();
         throw new DOMException('Export cancelled by user', 'AbortError');
       }
       if (encoderError) {
         throw encoderError;
+      }
+      if (audioEncoderError) {
+        throw audioEncoderError;
       }
 
       const timeSeconds = startTime + i / fps;
@@ -246,7 +365,7 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       // Composite complete visual frame
       compositeRenderFrame(ctx, frame, { mapCanvas });
 
-      // Encode frame
+      // Encode video frame
       const presentationUs = Math.round(i * usPerFrame);
       const videoFrame = new VideoFrame(canvas, {
         timestamp: presentationUs,
@@ -254,11 +373,11 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       });
 
       const isKeyFrame = i % (fps * 2) === 0;
-      encoder.encode(videoFrame, { keyFrame: isKeyFrame });
+      videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
       videoFrame.close();
 
-      // Encoder backpressure management
-      while (encoder.encodeQueueSize > 4) {
+      // Video encoder backpressure management
+      while (videoEncoder.encodeQueueSize > 4) {
         await new Promise((r) => setTimeout(r, 4));
       }
 
@@ -270,12 +389,64 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       onProgress?.({
         currentFrame: i + 1,
         totalFrames,
-        percent: Math.round(((i + 1) / totalFrames) * 100),
+        percent: Math.round(((i + 1) / totalFrames) * (hasAudio ? 90 : 98)),
         phase: 'rendering',
         elapsedMs: Math.round(elapsedMs),
         estimatedRemainingMs,
-        message: `Rendering frame ${i + 1} of ${totalFrames}...`,
+        message: `Rendering video frame ${i + 1} of ${totalFrames}...`,
       });
+    }
+
+    // 6. Encode synchronized AAC audio chunks
+    if (hasAudio && audioEncoder && mixedAudio) {
+      onProgress?.({
+        currentFrame: totalFrames,
+        totalFrames,
+        percent: 92,
+        phase: 'encoding',
+        elapsedMs: Math.round(performance.now() - startTimeMs),
+        estimatedRemainingMs: 30,
+        message: 'Encoding synchronized AAC audio track...',
+      });
+
+      const audioChunkFrames = 1024;
+      const totalAudioSamples = mixedAudio.leftChannel.length;
+
+      for (let offset = 0; offset < totalAudioSamples; offset += audioChunkFrames) {
+        if (abortSignal?.aborted) {
+          videoEncoder.close();
+          audioEncoder.close();
+          throw new DOMException('Export cancelled by user', 'AbortError');
+        }
+        if (audioEncoderError) {
+          throw audioEncoderError;
+        }
+
+        const framesThisChunk = Math.min(audioChunkFrames, totalAudioSamples - offset);
+        const planarBuffer = new Float32Array(framesThisChunk * 2);
+        planarBuffer.set(mixedAudio.leftChannel.subarray(offset, offset + framesThisChunk), 0);
+        planarBuffer.set(mixedAudio.rightChannel.subarray(offset, offset + framesThisChunk), framesThisChunk);
+
+        const presentationAudioUs = Math.round((offset / sampleRate) * 1e6);
+        const audioData = new AudioData({
+          format: 'f32-planar',
+          sampleRate,
+          numberOfFrames: framesThisChunk,
+          numberOfChannels: channelCount,
+          timestamp: presentationAudioUs,
+          data: planarBuffer,
+        });
+
+        audioEncoder.encode(audioData);
+        audioData.close();
+
+        while (audioEncoder.encodeQueueSize > 8) {
+          await new Promise((r) => setTimeout(r, 4));
+        }
+      }
+
+      await audioEncoder.flush();
+      audioEncoder.close();
     }
 
     onProgress?.({
@@ -284,19 +455,18 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       percent: 99,
       phase: 'muxing',
       elapsedMs: Math.round(performance.now() - startTimeMs),
-      estimatedRemainingMs: 50,
-      message: 'Finalizing MP4 container...',
+      estimatedRemainingMs: 20,
+      message: 'Finalizing MP4 container (H.264 + AAC)...',
     });
 
-    await encoder.flush();
-    encoder.close();
+    await videoEncoder.flush();
+    videoEncoder.close();
 
-    if (encoderError) {
-      throw encoderError;
-    }
+    if (encoderError) throw encoderError;
+    if (audioEncoderError) throw audioEncoderError;
 
     muxer.finalize();
-    const buffer = muxer.target.buffer;
+    const buffer = muxerTarget.buffer;
     const blob = new Blob([buffer], { type: 'video/mp4' });
     const filename = `${journey.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}_${config.profileName.toLowerCase().replace(/[^a-z0-9]/g, '_')}.mp4`;
 
@@ -309,6 +479,10 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       width: config.width,
       height: config.height,
       sizeBytes: blob.size,
+      hasAudioTrack: hasAudio,
+      audioCodec: hasAudio ? (aacCodec ?? 'aac') : undefined,
+      audioChannels: hasAudio ? channelCount : undefined,
+      audioSampleRate: hasAudio ? sampleRate : undefined,
     };
 
     onProgress?.({
@@ -318,13 +492,16 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       phase: 'complete',
       elapsedMs: Math.round(performance.now() - startTimeMs),
       estimatedRemainingMs: 0,
-      message: `Export completed successfully (${(blob.size / (1024 * 1024)).toFixed(2)} MB)`,
+      message: `Export completed successfully (${(blob.size / (1024 * 1024)).toFixed(2)} MB${hasAudio ? ' with AAC audio' : ''})`,
     });
 
     return result;
   } catch (err) {
-    if (encoder.state !== 'closed') {
-      encoder.close();
+    if (videoEncoder.state !== 'closed') {
+      videoEncoder.close();
+    }
+    if (audioEncoder && audioEncoder.state !== 'closed') {
+      audioEncoder.close();
     }
     throw err;
   }
@@ -427,6 +604,7 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
           width: config.width,
           height: config.height,
           sizeBytes: blob.size,
+          hasAudioTrack: false,
         });
       };
       recorder.onerror = (e) => reject(e);

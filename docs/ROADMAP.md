@@ -250,19 +250,55 @@
 - [x] Strict TypeScript build passing (`tsc -b && vite build` in ~470ms).
 - [x] End-to-end browser smoke test verified: Export panel, Fast Draft 720p profile, 1080p PNG snapshot, deterministic 900-frame video export (0.18 MB MP4), playable video preview, and recording (`phase7_render_export_smoke_1792050897331.webp`).
 
-## Phase 8: Audio Synchronization, Narration & Final Production Polish
+## Phase 8: Deterministic Audio Timeline, Mixing, and MP4 Synchronization
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Typed Audio Domain Model (`app/src/domain/audio/types.ts`):
+  - Typed domain models: `AudioClip`, `AudioTrack`, `AudioTimeline`, `ActiveAudioClipState`, `EvaluatedAudioState`.
+  - Properties: `id`, `name`, `assetRef`, `trackId`, `timelineStart`, `duration`, `sourceOffset` (trim-in), `volume` (gain), `fadeIn`, `fadeOut`.
+  - Clip validation (`validateAudioClip`): checks ID, name, finite positive duration, non-negative start/offset, and non-negative fade durations.
+  - Integration with `Journey.audio` and backward-compatible project migration in `migrateProject`.
+  - Serialization integrity: guarantees `.wayvora.json` contains only clip timing and URI references, with zero raw binary PCM or base64 audio data stored.
+  - Editor integration (`app/src/domain/editor.ts`): immutable undo/redo history for `addAudioClip`, `updateAudioClip`, `deleteAudioClip`, `setAudioTrackVolume`, and `setMasterAudioVolume`.
+- [x] Deterministic Offline PCM Mixer & Synthesis (`app/src/domain/audio/mixer.ts`):
+  - Pure mathematical gain calculation with smooth sinusoidal S-curve fade-in and fade-out (`calculateClipGain`).
+  - Active clip evaluation at arbitrary timeline time (`evaluateAudioTimelineAtTime`).
+  - Offline Float32Array PCM stereo mixing at 44.1 kHz (`mixAudioPcm`): sample-accurate accumulation across all tracks.
+  - Clipping prevention: hyperbolic tangent soft-knee limiter compression ($\tanh(x)$ above $\pm 0.95$) preventing harsh digital distortion.
+  - Zero-dependency procedural synthesis: `synthesizeAudioTone` generates harmonic A-major ambient triad pads (220 Hz + 277.18 Hz + 329.63 Hz).
+  - Pure binary WAV generator: `pcmToWavBlob` writes 16-bit stereo RIFF/WAVE files for zero-dependency browser preview.
+- [x] Audio Decoding & Asset Management (`app/src/domain/audio/audioLoader.ts`):
+  - `decodeAudioSource`: decodes procedural synthetic URIs, ObjectURLs, and standard audio files via browser `AudioContext.decodeAudioData`.
+  - LRU/Map buffer caching with explicit cleanup (`clearDecodedAudioCache`).
+  - Missing/corrupted audio handling: logs diagnostic warnings and returns silent buffers rather than aborting exports.
+- [x] Audiovisual WebCodecs Exporter Integration (`app/src/domain/render/exporter.ts`):
+  - WebCodecs `AudioEncoder` configured for `mp4a.40.2` (AAC-LC, 44.1 kHz, 128 kbps stereo).
+  - `mp4-muxer` configured with `{ codec: 'aac', numberOfChannels: 2, sampleRate: 44100 }` and `firstTimestampBehavior: 'cross-track-offset'`.
+  - Chunked 1024-frame `AudioData` planar buffers with microsecond presentation timestamps aligned with video frame bounds.
+  - Defined behavior for empty audio timelines (graceful fallback to video-only MP4) and duration mismatches.
+- [x] Studio UI Integration (`app/src/App.tsx`, `app/src/index.css`):
+  - Dedicated **🎵 Audio** tab in studio sidebar with live clip count badge.
+  - Master volume slider and Track cards (Background Music, Voiceover/Narration).
+  - Procedural "✨ Ambient Score" generator button and "📁 Add File" picker.
+  - Clip cards with start time, trim, duration, volume, and fade in/out sliders.
+  - In-studio clip preview (play/pause) via hidden HTML5 audio element.
+  - Export panel status badge: live indication of `Audiovisual Mode: 🎵 Synchronized AAC Audio` vs `Video Only`.
+- [x] Automated Unit Test Suite: 182 tests passing across 15 test suites (including 10 comprehensive tests in `app/src/__tests__/audio.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~470ms).
+
+## Phase 9: Visual Polish, Shaders, Preset Templates & Social Formats
 **Status**: PROPOSED
 
-- Ambient audio track and background music synchronization
-- Audio fade-in/fade-out at scene transitions
-- Narration voiceover audio track integration
-- Web Audio API mixer for video export muxing
-- Final performance optimization and mobile responsiveness polish
+- Cinematic map shaders (vignette, atmospheric haze, depth of field)
+- Preset aesthetic styles (Vintage Travelogue, Alpine Minimal, Sunset Gold, Cyberpunk Neon)
+- Aspect ratio canvas letterboxing and safe-zone guides for vertical video (9:16)
+- Export batch rendering and animated map route glow transitions
 
 ## Non-Goals (Explicit)
 
 - Native mobile app (browser-first)
+- Full Digital Audio Workstation (DAW) with complex VSTs/plugins
+- AI voice cloning / cloud TTS upload
 - Real-time GPS navigation / turn-by-turn routing
-- Social network features / cloud lock-in
 - Silently fabricating missing elevation or route coordinates
 

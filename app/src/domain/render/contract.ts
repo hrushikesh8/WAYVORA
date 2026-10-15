@@ -13,6 +13,7 @@ import type {
   RenderStoryOverlay,
   DeterminismReport,
 } from './types';
+import { evaluateAudioTimelineAtTime } from '../audio/mixer';
 
 /**
  * Evaluates a complete RenderFrame for a given journey at an explicit timestamp.
@@ -115,6 +116,7 @@ export function evaluateRenderFrame(
     dwellProgress: frameState.dwellProgress,
     camera,
     story,
+    audio: evaluateAudioTimelineAtTime(journey.audio, clampedTime),
     resources,
     metadata: {
       width,

@@ -13,6 +13,7 @@ import type {
   StoryScene,
   TransitionType,
 } from '../types';
+import type { EvaluatedAudioState } from '../audio/types';
 
 export interface RenderCameraPose {
   center: RoutePoint;
@@ -85,6 +86,8 @@ export interface RenderFrame {
   camera: RenderCameraPose;
   /** Complete narrative story overlays, captions, and transitions */
   story: RenderStoryOverlay;
+  /** Evaluated audio playback state (clips, gains, master volume) */
+  audio?: EvaluatedAudioState;
   /** Asynchronous resource readiness status */
   resources: RenderResourceState;
   /** Target resolution and display metadata */
@@ -110,6 +113,10 @@ export interface ExportJobConfig {
   bitrateMbps: number;
   codec: VideoCodec;
   aspectRatio: AspectRatio;
+  /** Whether to export synchronized audio track (default true) */
+  includeAudio?: boolean;
+  /** Audio bitrate in kbps (default 128) */
+  audioBitrateKbps?: number;
   /** Optional time range in seconds (defaults to full journey) */
   timeRange?: {
     startTime: number;
@@ -138,6 +145,10 @@ export interface ExportResult {
   width: number;
   height: number;
   sizeBytes: number;
+  hasAudioTrack?: boolean;
+  audioCodec?: string;
+  audioChannels?: number;
+  audioSampleRate?: number;
 }
 
 /**
