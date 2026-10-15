@@ -18,6 +18,7 @@ import type {
 import { segmentTypeForMode, generateId } from './types';
 import { haversineDistance } from './geo';
 import type { RouteResult } from './routing/types';
+import type { StoryScene, MediaAsset } from './story/types';
 
 export class EditError extends Error {
   constructor(message: string) {
@@ -565,4 +566,193 @@ export function createRoutedSegment(
     newSegmentId,
   };
 }
+
+// ── Story Scene & Media Editing Operations ──
+
+/**
+ * Adds a story scene to the journey timeline.
+ */
+export function addStoryScene(journey: Journey, scene: StoryScene): Journey {
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const updatedScenes = [...existingScenes, scene].sort((a, b) => a.startTime - b.startTime);
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates an existing story scene in the journey timeline.
+ */
+export function updateStoryScene(
+  journey: Journey,
+  sceneId: string,
+  updates: Partial<StoryScene>
+): Journey {
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const sceneIndex = existingScenes.findIndex((s) => s.id === sceneId);
+  if (sceneIndex === -1) {
+    throw new EditError(`Story scene not found with id: ${sceneId}`);
+  }
+
+  const updatedScene = { ...existingScenes[sceneIndex], ...updates };
+  const updatedScenes = [...existingScenes];
+  updatedScenes[sceneIndex] = updatedScene;
+  updatedScenes.sort((a, b) => a.startTime - b.startTime);
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Deletes a story scene from the journey timeline.
+ */
+export function deleteStoryScene(journey: Journey, sceneId: string): Journey {
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const updatedScenes = existingScenes.filter((s) => s.id !== sceneId);
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Reorders story scenes by moving a scene from one index to another.
+ */
+export function reorderStoryScenes(
+  journey: Journey,
+  fromIndex: number,
+  toIndex: number
+): Journey {
+  const existingScenes = [...((journey.timeline.scenes ?? []) as StoryScene[])];
+  if (
+    fromIndex < 0 ||
+    fromIndex >= existingScenes.length ||
+    toIndex < 0 ||
+    toIndex >= existingScenes.length
+  ) {
+    throw new EditError(`Invalid reorder indices: from ${fromIndex} to ${toIndex}`);
+  }
+
+  const [moved] = existingScenes.splice(fromIndex, 1);
+  existingScenes.splice(toIndex, 0, moved);
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: existingScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Attaches a media asset (photo/video) to a story scene.
+ */
+export function attachMediaToScene(
+  journey: Journey,
+  sceneId: string,
+  media: MediaAsset
+): Journey {
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const sceneIndex = existingScenes.findIndex((s) => s.id === sceneId);
+  if (sceneIndex === -1) {
+    throw new EditError(`Scene not found with id: ${sceneId}`);
+  }
+
+  const targetScene = existingScenes[sceneIndex];
+  const existingMedia = targetScene.media ?? [];
+  const updatedScene: StoryScene = {
+    ...targetScene,
+    media: [...existingMedia.filter((m) => m.id !== media.id), { ...media, sceneId }],
+  };
+
+  const updatedScenes = [...existingScenes];
+  updatedScenes[sceneIndex] = updatedScene;
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Attaches a media asset to a stop.
+ */
+export function attachMediaToStop(
+  journey: Journey,
+  stopId: string,
+  media: MediaAsset
+): Journey {
+  const stopIndex = journey.stops.findIndex((s) => s.id === stopId);
+  if (stopIndex === -1) {
+    throw new EditError(`Stop not found with id: ${stopId}`);
+  }
+
+  const targetStop = journey.stops[stopIndex];
+  const existingMedia = targetStop.media ?? [];
+  const updatedStop = {
+    ...targetStop,
+    media: [...existingMedia.filter((m) => m.id !== media.id), { ...media, stopId }],
+  };
+
+  const updatedStops = [...journey.stops];
+  updatedStops[stopIndex] = updatedStop;
+
+  return {
+    ...journey,
+    stops: updatedStops,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Removes a media asset anywhere from the journey (scenes or stops).
+ */
+export function removeMedia(journey: Journey, mediaId: string): Journey {
+  // Remove from scenes
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const updatedScenes = existingScenes.map((sc) => ({
+    ...sc,
+    media: sc.media ? sc.media.filter((m) => m.id !== mediaId) : [],
+  }));
+
+  // Remove from stops
+  const updatedStops = journey.stops.map((st) => ({
+    ...st,
+    media: st.media ? st.media.filter((m) => m.id !== mediaId) : [],
+  }));
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    stops: updatedStops,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 

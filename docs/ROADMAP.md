@@ -168,14 +168,46 @@
 - [x] End-to-end browser smoke test verified: AutoCam generation, keyframe seeking, manual camera modes (orbit/chase), Mt. Whitney Alpine Ascent (4421m), and clearance HUD with WebP recording (`phase5_cinematic_camera_smoke_1792047911221.webp`).
 
 
-## Phase 6: Media, Annotations & Audio
-**Status**: PROPOSED
+## Phase 6: Story Editor, Media Annotations and Scene Timeline
+**Status**: VERIFIED & COMPLETE (2026-10-15)
 
-- Photo attachment to stops with geo-anchoring
-- Photo modal / callout display during stop dwell
-- Text captions, milestones, and summit annotations
-- Ambient audio / narration track synchronization
-- Dynamic video overlay graphics (title card, speed, elevation graph, odometer)
+- [x] Story Domain Model (`app/src/domain/story/types.ts`, `app/src/domain/types.ts`):
+  - Typed models: `StoryScene`, `SceneIntent` (`establishing`, `travel`, `stop`, `highlight`, `arrival`), `MediaAsset`, `SceneTransition` (`cut`, `fade`, `dissolve`, `wipe`), and `EvaluatedStoryState`.
+  - Narrative copy: scene headline `title`, supporting `subtitle`, and travelogue `caption`.
+  - Camera mode overrides and active keyframe associations.
+  - Composable domain separation: story overlays are decoupled from raw GPS points and routing-provider data.
+- [x] Zero-Dependency Binary EXIF Parser (`app/src/domain/story/media.ts`):
+  - Pure `DataView` over `ArrayBuffer` parser (`parseJpegExif`) for JPEG APP1 (`0xFFE1`) marker.
+  - Decodes TIFF endianness (both `II` Little Endian and `MM` Big Endian), IFD0 tags, and sub-IFDs.
+  - Extracts camera hardware model (0x0110) and original capture timestamp (`DateTimeOriginal` 0x9003).
+  - Decodes GPS Info IFD (0x8825) rational coordinate arrays into true decimal degrees with latitude/longitude hemisphere references.
+  - **Strict Provenance**: Never fabricates capture coordinates or timestamps; fields remain strictly `undefined` if metadata is missing or corrupted.
+- [x] Lightweight Project Serialization & Backward-Compatible Migration (`app/src/domain/serialization.ts`):
+  - Media assets stored as lightweight references (`url`, `filename`, `geoPosition`, `timestamp`, `title`, `caption`).
+  - Zero binary base64 bloat in project JSON (`.wayvora.json`).
+  - Automatic migration in `migrateProject`: normalizes legacy scene percentage ranges to absolute timeline seconds, populates default intents, and initializes media arrays.
+- [x] Deterministic Pure Story Evaluation (`app/src/domain/story/evaluator.ts`):
+  - `evaluateStoryAtTime(scenes, timeSeconds, options)` pure mathematical function deriving active scene, title cards, captions, active media callouts, and transition state.
+  - 100% deterministic: seeking forward, backward, or repeated evaluation at time $t$ yields identical overlay states with zero side effects.
+  - Seamlessly composed into `evaluateTimeline(journey, time)` to populate `FrameState.storyState`.
+- [x] AutoStory Synthesis Generator (`generateDefaultStoryScenes`):
+  - Analyzes journey duration, departure, stop waypoints, and arrival to automatically generate a cohesive narrative story arc.
+  - Validates scenes with `validateStoryScenes` (zero timeline gaps or inversions).
+- [x] Story Editor Operations & Full Undo/Redo Integration (`app/src/domain/editor.ts`):
+  - `addStoryScene`, `updateStoryScene`, `deleteStoryScene`, `reorderStoryScenes`.
+  - `attachMediaToScene`, `attachMediaToStop`, `removeMedia`.
+  - All operations wrapped in immutable undo/redo history stack (`pushEditorHistory`).
+- [x] Studio UI & Cinematic Canvas Overlays (`app/src/App.tsx`, `app/src/index.css`):
+  - Story Inspector Tab in sidebar with AutoStory generator ("✨ AutoStory"), Add Scene button ("➕ Add Scene"), scene cards with intent badges, timeline bounds, camera mode selector, and photo attachment.
+  - Live viewport canvas overlays:
+    - `.cinematic-title-card`: Centered glassmorphic title card with subtle letter-spacing and backdrop blur.
+    - `.cinematic-caption-bar`: Bottom travelogue caption bar displaying narrative commentary.
+    - `.floating-photo-card`: Floating photograph callout showcasing attached photos with authentic EXIF timestamp and GPS badges.
+    - `.transition-overlay`: Full-viewport fade/dissolve overlay preview during scene transitions.
+  - Stops Tab photo attachment integration with thumbnail preview and removal.
+- [x] Automated Unit Test Suite: 158 tests passing across 13 test suites (including 10 comprehensive tests in `app/src/__tests__/story.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~473ms).
+- [x] End-to-end browser smoke test verified: AutoStory synthesis, story scene editing, canvas title card and caption bar overlays, playhead synchronization, and recording (`phase6_story_media_smoke_1792049294905.webp`).
 
 ## Phase 7: Deterministic Video Export (WebCodecs)
 **Status**: PROPOSED

@@ -201,5 +201,40 @@ Define a clean, provider-independent `RoutingAdapter` interface with typed `Rout
 - Spherical geodesics and angle wrapping eliminate sudden 360° camera spins or antimeridian distortions.
 - Mountain collision aversion prevents the camera from clipping into rock faces during steep mountain ascents.
 
+---
+
+## ADR-011: Story Domain, Zero-Dependency EXIF Extraction, and Composable Overlay Timeline
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**: Moving beyond geographic route rendering and camera choreography, WAYVORA must function as a journey-story editor. Users need to combine their journey with narrative scenes (establishing, travel, stop dwell, highlight, arrival), titles, subtitles, captions, photographs, and visual transitions into a unified deterministic timeline. Crucially, project serialization must remain lightweight without embedding multi-megabyte binary payloads into JSON, and EXIF metadata (GPS, capture timestamps) must be accurately extracted from user photos without third-party bloat and without ever fabricating unverified coordinates.
+
+**Decision**:
+1. **Story Domain Model**:
+   - Introduce `StoryScene` with typed `SceneIntent` (`establishing`, `travel`, `stop`, `highlight`, `arrival`), timeline time intervals (`startTime`, `endTime`), narrative copy (`title`, `subtitle`, `caption`), visual `transition` (`cut`, `fade`, `dissolve`, `wipe`), and associated `media` assets.
+   - Separate story narrative layer from raw GPS track points and routing-provider data while maintaining composability.
+2. **Zero-Dependency Binary EXIF Parser**:
+   - Implement `parseJpegExif` using native `DataView` over `ArrayBuffer` to parse JPEG APP1 (`0xFFE1`), read TIFF headers (both `II` Little Endian and `MM` Big Endian), decode IFD0 tags, extract `DateTimeOriginal` (0x9003) and camera model (0x0110), and resolve GPS Info IFD (0x8825) rational coordinate arrays into verified decimal degrees with hemisphere reference.
+   - **Strict Provenance**: Never fabricate capture coordinates or timestamps; if EXIF is absent or corrupt, properties remain strictly `undefined`.
+3. **Clean Project Serialization & Migration**:
+   - Store media assets as metadata references (`url`, `filename`, `geoPosition`, `timestamp`, `title`, `caption`). Never embed binary base64 payloads into `.wayvora.json`.
+   - Update `migrateProject` to auto-normalize legacy scenes (convert percentage boundaries to absolute timeline seconds, set default intents, and initialize empty media collections).
+4. **Deterministic Timeline Evaluation**:
+   - Implement `evaluateStoryAtTime` as a pure mathematical function $(scenes, t, options) \to EvaluatedStoryState$.
+   - Repeated evaluation at the same timeline time $t$ yields identical state regardless of playback history, seeking direction, or frame rate.
+   - Integrate into `evaluateTimeline` to supply `FrameState.storyState` alongside spatial travel coordinates and camera keyframe interpolation.
+5. **Interactive Story Studio & Full Undo/Redo**:
+   - Add dedicated "Story" inspector tab with scene cards, intent badges, time controls, title/subtitle/caption inputs, camera mode overrides, and media attachment.
+   - Provide "✨ AutoStory" synthesis generator (`generateDefaultStoryScenes`) analyzing journey duration, departure, stop waypoints, and arrival.
+   - Render live cinematic canvas overlays in the viewport (`cinematic-title-card`, `cinematic-caption-bar`, `floating-photo-card`, `transition-overlay`).
+   - Incorporate all story mutations (`addStoryScene`, `updateStoryScene`, `deleteStoryScene`, `reorderStoryScenes`, `attachMediaToScene`, `attachMediaToStop`, `removeMedia`) into the immutable undo/redo history stack.
+
+**Rationale**:
+- Zero-dependency parsing keeps bundle size minimal and avoids supply-chain vulnerabilities.
+- Preserving authentic EXIF provenance guarantees that photo placement along the route is faithful to real-world capture conditions.
+- Separating story overlays from camera keyframes and geographic route segments allows users to freely edit narrative copy and timing without corrupting route points or map geometry.
+
+
 
 

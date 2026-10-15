@@ -9,6 +9,7 @@ import type { Journey, RoutePoint, Scene, CameraParams, Stop } from './types';
 import { computeCumulativeDistances, interpolateRoute, haversineDistance } from './geo';
 import { getAllPoints } from './journey';
 import { evaluateCameraAtTime, type EvaluatedCameraState } from './camera';
+import { evaluateStoryAtTime, type EvaluatedStoryState, type StoryScene } from './story';
 
 export interface FrameState {
   /** Current position on the route */
@@ -23,6 +24,8 @@ export interface FrameState {
   camera: CameraParams | null;
   /** Evaluated cinematic camera state (if keyframes or camera director active) */
   cameraState?: EvaluatedCameraState | null;
+  /** Evaluated story overlays, titles, captions, media callouts, and transitions */
+  storyState?: EvaluatedStoryState | null;
   /** Time in seconds */
   time: number;
   /** Whether the traveler is currently dwelling/paused at a stop */
@@ -261,6 +264,7 @@ export function evaluateTimeline(
       scene: null,
       camera: null,
       cameraState: null,
+      storyState: null,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -281,6 +285,7 @@ export function evaluateTimeline(
       scene: journey.timeline.scenes[0] ?? null,
       camera: journey.timeline.scenes[0]?.params ?? null,
       cameraState: null,
+      storyState: null,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -310,6 +315,9 @@ export function evaluateTimeline(
     const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
       ? evaluateCameraAtTime(journey.timeline.keyframes, t, point, bearing, activeScene?.cameraMode ?? 'chase')
       : null;
+    const storyState = journey.timeline.scenes && journey.timeline.scenes.length > 0
+      ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, null)
+      : null;
 
     return {
       position: point,
@@ -318,6 +326,7 @@ export function evaluateTimeline(
       scene: activeScene,
       camera: activeScene?.params ?? null,
       cameraState,
+      storyState,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -402,6 +411,9 @@ export function evaluateTimeline(
   const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
     ? evaluateCameraAtTime(journey.timeline.keyframes, t, position, bearing, activeScene?.cameraMode ?? 'chase')
     : null;
+  const storyState = journey.timeline.scenes && journey.timeline.scenes.length > 0
+    ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, activeStop)
+    : null;
 
   return {
     position,
@@ -410,6 +422,7 @@ export function evaluateTimeline(
     scene: activeScene,
     camera: activeScene?.params ?? null,
     cameraState,
+    storyState,
     time: t,
     isDwelling,
     activeStop,
@@ -424,7 +437,9 @@ export function evaluateTimeline(
  */
 function findActiveScene(scenes: Scene[], progress: number): Scene | null {
   for (const scene of scenes) {
-    if (progress >= scene.startPercent && progress <= scene.endPercent) {
+    const sp = scene.startPercent ?? 0;
+    const ep = scene.endPercent ?? 1;
+    if (progress >= sp && progress <= ep) {
       return scene;
     }
   }

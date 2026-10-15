@@ -103,12 +103,30 @@ export interface MediaAsset {
   id: string;
   type: MediaType;
   url: string;
-  filename?: string;
+  filename: string;
+  title?: string;
+  caption?: string;
+  attribution?: string;
+  mimeType?: string;
+  sizeBytes?: number;
   geoPosition?: RoutePoint;
   timestamp?: string;
+  cameraModel?: string;
+  stopId?: string;
+  sceneId?: string;
+  isMissing?: boolean;
 }
 
-// ── Camera & Scenes ──
+// ── Story & Scenes ──
+
+export type SceneIntent = 'establishing' | 'travel' | 'stop' | 'highlight' | 'arrival';
+
+export type TransitionType = 'cut' | 'fade' | 'dissolve' | 'wipe';
+
+export interface SceneTransition {
+  type: TransitionType;
+  duration: number; // duration in seconds
+}
 
 export type CameraMode = 'overview' | 'flyover' | 'chase' | 'ground' | 'orbit' | 'birdeye';
 
@@ -132,9 +150,43 @@ export interface Scene {
   id: string;
   name: string;
   cameraMode: CameraMode;
-  startPercent: number; // 0–1
-  endPercent: number;   // 0–1
+  startPercent?: number; // 0–1
+  endPercent?: number;   // 0–1
   params: CameraParams;
+  startTime?: number;
+  endTime?: number;
+  intent?: SceneIntent;
+  title?: string;
+  subtitle?: string;
+  caption?: string;
+  media?: MediaAsset[];
+  stopId?: string;
+  segmentId?: string;
+  transition?: SceneTransition;
+  keyframeIds?: string[];
+}
+
+export interface StoryScene extends Scene {
+  intent: SceneIntent;
+  startTime: number;
+  endTime: number;
+}
+
+export interface EvaluatedStoryState {
+  activeScene: StoryScene | null;
+  title?: string;
+  subtitle?: string;
+  caption?: string;
+  activeMedia: MediaAsset[];
+  transition?: {
+    type: TransitionType;
+    progress: number; // 0..1
+    fromSceneId?: string;
+    toSceneId: string;
+  };
+  isStopHighlight: boolean;
+  activeStopName?: string;
+  activeStopId?: string;
 }
 
 export type CameraEasing = 'linear' | 'easeInQuad' | 'easeOutQuad' | 'easeInOutQuad' | 'easeInOutCubic' | 'smoothstep';

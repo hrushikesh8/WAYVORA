@@ -65,9 +65,26 @@ export function deserializeProject(json: string): Journey {
  * Migrate a project from an older version to the current version.
  * Currently only v1 exists, so this is a no-op placeholder.
  */
-function migrateProject(fromVersion: number, journey: unknown): Journey {
+function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
   if (fromVersion === 1) {
-    return journey as Journey;
+    const journey = journeyRaw as Journey;
+    if (journey.timeline?.scenes) {
+      const dur = journey.timeline.duration || 60;
+      journey.timeline.scenes = (journey.timeline.scenes as any[]).map((sc: any) => {
+        const startTime =
+          sc.startTime != null ? (sc.startTime as number) : ((sc.startPercent as number) ?? 0) * dur;
+        const endTime =
+          sc.endTime != null ? (sc.endTime as number) : ((sc.endPercent as number) ?? 1) * dur;
+        return {
+          ...sc,
+          intent: (sc.intent as string) ?? 'travel',
+          startTime: Math.round(startTime * 10) / 10,
+          endTime: Math.round(endTime * 10) / 10,
+          media: Array.isArray(sc.media) ? sc.media : [],
+        } as any;
+      });
+    }
+    return journey;
   }
   throw new DeserializationError(`Unknown project version: ${fromVersion}`);
 }

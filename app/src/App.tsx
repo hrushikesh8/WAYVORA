@@ -29,8 +29,21 @@ import {
   canUndo,
   canRedo,
   getSegmentEditAudit,
+  addStoryScene,
+  updateStoryScene,
+  deleteStoryScene,
+  attachMediaToScene,
+  attachMediaToStop,
+  removeMedia,
   type EditorHistory,
 } from './domain/editor';
+import {
+  type StoryScene,
+  type SceneIntent,
+  createMediaAsset,
+  parseJpegExif,
+  generateDefaultStoryScenes,
+} from './domain/story';
 import {
   OsrmRoutingProvider,
   MockRoutingProvider,
@@ -101,7 +114,7 @@ export default function App() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('overview');
   const [mapPitch, setMapPitch] = useState(45);
   const [mapZoom, setMapZoom] = useState(11);
-  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'stats'>('stops');
+  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'stats'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
 
   // GPX Import State
@@ -135,6 +148,12 @@ export default function App() {
   });
   const [cameraKeyframes, setCameraKeyframes] = useState<CameraKeyframe[]>(() => journey.timeline.keyframes ?? []);
   const [liveClearance, setLiveClearance] = useState<CameraClearanceResult | null>(null);
+
+  // Story & Media Upload State
+  const sceneMediaInputRef = useRef<HTMLInputElement>(null);
+  const targetSceneIdForMedia = useRef<string | null>(null);
+  const stopMediaInputRef = useRef<HTMLInputElement>(null);
+  const targetStopIdForMedia = useRef<string | null>(null);
 
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -661,6 +680,119 @@ export default function App() {
     applyJourneyEdit(updated, 'Cleared camera keyframes (Manual Follow active)');
   };
 
+  // Story Scene Handlers
+  const handleAutoStory = () => {
+    const generated = generateDefaultStoryScenes(journey);
+    const updated = {
+      ...journey,
+      timeline: {
+        ...journey.timeline,
+        scenes: generated,
+      },
+    };
+    applyJourneyEdit(updated, `Generated ${generated.length} story scenes (AutoStory)`);
+  };
+
+  const handleAddStoryScene = () => {
+    const dur = effectiveDuration || 60;
+    const startTime = Math.round(currentTime * 10) / 10;
+    const endTime = Math.min(dur, Math.round((startTime + 6) * 10) / 10);
+    const newScene: StoryScene = {
+      id: `story-scene-${Date.now()}`,
+      name: `Scene at ${formatTime(startTime)}`,
+      intent: 'highlight',
+      startTime,
+      endTime: endTime > startTime ? endTime : startTime + 5,
+      cameraMode: 'chase',
+      params: { zoom: 14, pitch: 60, bearing: Math.round(currentFrame.bearing), rotationSpeed: 0 },
+      title: 'New Scene',
+      subtitle: `Captured at ${formatTime(startTime)}`,
+      caption: 'Enter story travelogue description...',
+      media: [],
+    };
+    const updated = addStoryScene(journey, newScene);
+    applyJourneyEdit(updated, `Added scene: ${newScene.name}`);
+  };
+
+  const handleUpdateStoryScene = (sceneId: string, updates: Partial<StoryScene>) => {
+    try {
+      const updated = updateStoryScene(journey, sceneId, updates);
+      applyJourneyEdit(updated);
+    } catch (err: unknown) {
+      console.warn('Update scene error:', err);
+    }
+  };
+
+  const handleDeleteStoryScene = (sceneId: string) => {
+    try {
+      const updated = deleteStoryScene(journey, sceneId);
+      applyJourneyEdit(updated, 'Scene removed');
+    } catch (err: unknown) {
+      console.warn('Delete scene error:', err);
+    }
+  };
+
+  const handleSceneMediaSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const sceneId = targetSceneIdForMedia.current;
+    if (!file || !sceneId) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buffer = reader.result as ArrayBuffer;
+      const exif = parseJpegExif(buffer);
+      const blobUrl = URL.createObjectURL(file);
+      const asset = createMediaAsset(file.name, blobUrl, {
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        geoPosition: exif.geoPosition,
+        timestamp: exif.capturedAt,
+        cameraModel: exif.cameraModel,
+        sceneId,
+      });
+
+      const updated = attachMediaToScene(journey, sceneId, asset);
+      applyJourneyEdit(
+        updated,
+        `Attached photo: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
+      );
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  };
+
+  const handleStopMediaSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const stopId = targetStopIdForMedia.current;
+    if (!file || !stopId) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buffer = reader.result as ArrayBuffer;
+      const exif = parseJpegExif(buffer);
+      const blobUrl = URL.createObjectURL(file);
+      const asset = createMediaAsset(file.name, blobUrl, {
+        title: file.name.replace(/\.[^/.]+$/, ''),
+        geoPosition: exif.geoPosition,
+        timestamp: exif.capturedAt,
+        cameraModel: exif.cameraModel,
+        stopId,
+      });
+
+      const updated = attachMediaToStop(journey, stopId, asset);
+      applyJourneyEdit(
+        updated,
+        `Attached photo to stop: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
+      );
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  };
+
+  const handleRemoveMedia = (mediaId: string) => {
+    const updated = removeMedia(journey, mediaId);
+    applyJourneyEdit(updated, 'Photo removed');
+  };
+
   // Route Editing Dispatchers
   const applyJourneyEdit = (newJourney: Journey, notificationMsg?: string) => {
     setJourney(newJourney);
@@ -1080,6 +1212,12 @@ export default function App() {
               Segments ({journey.segments.length})
             </button>
             <button
+              className={`tab-btn ${activeTab === 'story' ? 'active' : ''}`}
+              onClick={() => setActiveTab('story')}
+            >
+              Story ({journey.timeline.scenes?.length ?? 0})
+            </button>
+            <button
               className={`tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
               onClick={() => setActiveTab('stats')}
             >
@@ -1212,6 +1350,34 @@ export default function App() {
                             />
                             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>sec</span>
                           </div>
+                        </div>
+
+                        {/* Stop Media Attachments */}
+                        <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                            {stop.media?.map((m) => (
+                              <img
+                                key={m.id}
+                                src={m.url}
+                                alt={m.filename}
+                                className="scene-thumb"
+                                style={{ width: '28px', height: '28px' }}
+                                title={m.title ?? m.filename}
+                              />
+                            ))}
+                          </div>
+                          <button
+                            className="btn-ghost"
+                            style={{ fontSize: '10px', padding: '2px 6px' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              targetStopIdForMedia.current = stop.id;
+                              stopMediaInputRef.current?.click();
+                            }}
+                            title="Attach photo to this stop"
+                          >
+                            📷 + Photo
+                          </button>
                         </div>
                       </div>
 
@@ -1572,6 +1738,75 @@ export default function App() {
         <div className="studio-center">
           <div ref={mapContainerRef} className="map-container" />
 
+          {/* Cinematic Story Overlays (Canvas Layer) */}
+          {currentFrame.storyState?.title && (
+            <div className="cinematic-title-card">
+              <div className="title-text">{currentFrame.storyState.title}</div>
+              {currentFrame.storyState.subtitle && (
+                <div className="subtitle-text">{currentFrame.storyState.subtitle}</div>
+              )}
+            </div>
+          )}
+
+          {currentFrame.storyState?.caption && (
+            <div className="cinematic-caption-bar">
+              <span>{currentFrame.storyState.caption}</span>
+            </div>
+          )}
+
+          {currentFrame.storyState?.activeMedia && currentFrame.storyState.activeMedia.length > 0 && (
+            <div className="floating-photo-card">
+              <img
+                src={currentFrame.storyState.activeMedia[0].url}
+                alt={currentFrame.storyState.activeMedia[0].filename}
+              />
+              <div className="photo-info">
+                <strong>{currentFrame.storyState.activeMedia[0].title ?? currentFrame.storyState.activeMedia[0].filename}</strong>
+                {currentFrame.storyState.activeMedia[0].caption && (
+                  <div>{currentFrame.storyState.activeMedia[0].caption}</div>
+                )}
+                <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+                  {currentFrame.storyState.activeMedia[0].geoPosition?.ele != null && (
+                    <span className="exif-badge">⛰️ {currentFrame.storyState.activeMedia[0].geoPosition?.ele}m</span>
+                  )}
+                  {currentFrame.storyState.activeMedia[0].timestamp && (
+                    <span className="exif-badge">
+                      🕒 {new Date(currentFrame.storyState.activeMedia[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {currentFrame.storyState?.transition && (
+            <div
+              className="transition-overlay"
+              style={{
+                opacity:
+                  currentFrame.storyState.transition.type === 'fade'
+                    ? 1 - Math.abs(currentFrame.storyState.transition.progress - 0.5) * 2
+                    : 0.3 * (1 - currentFrame.storyState.transition.progress),
+              }}
+            />
+          )}
+
+          {/* Hidden inputs for media upload */}
+          <input
+            type="file"
+            ref={sceneMediaInputRef}
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleSceneMediaSelected}
+          />
+          <input
+            type="file"
+            ref={stopMediaInputRef}
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleStopMediaSelected}
+          />
+
           {/* Map Top HUD */}
           <div className="map-hud-top">
             <div className="hud-chip">
@@ -1813,6 +2048,192 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            ) : activeTab === 'story' ? (
+              <div>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                  <button
+                    className="btn-ghost"
+                    style={{ flex: 1, fontSize: '11px', justifyContent: 'center' }}
+                    onClick={handleAutoStory}
+                    title="Synthesize smart narrative scenes with titles, subtitles and captions"
+                  >
+                    ✨ AutoStory
+                  </button>
+                  <button
+                    className="btn-ghost"
+                    style={{ flex: 1, fontSize: '11px', justifyContent: 'center' }}
+                    onClick={handleAddStoryScene}
+                    title="Add a custom scene at current playhead time"
+                  >
+                    ➕ Add Scene
+                  </button>
+                </div>
+
+                {(!journey.timeline.scenes || journey.timeline.scenes.length === 0) ? (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '12px 4px' }}>
+                    No story scenes defined yet. Click &quot;✨ AutoStory&quot; to automatically build scenes from your stops and route.
+                  </div>
+                ) : (
+                  (journey.timeline.scenes as StoryScene[]).map((scene) => {
+                    const isActive = currentFrame.storyState?.activeScene?.id === scene.id;
+                    return (
+                      <div
+                        key={scene.id}
+                        className={`story-scene-card ${isActive ? 'active-scene' : ''}`}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span className={`scene-intent-badge intent-${scene.intent ?? 'travel'}`}>
+                            {scene.intent ?? 'travel'}
+                          </span>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent-cyan)' }}>
+                            {formatTime(scene.startTime)} - {formatTime(scene.endTime)}
+                          </span>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                              className="btn-ghost"
+                              style={{ padding: '2px 5px', fontSize: '10px' }}
+                              onClick={() => setCurrentTime(scene.startTime)}
+                              title="Seek to scene start"
+                            >
+                              ▶
+                            </button>
+                            <button
+                              className="btn-ghost"
+                              style={{ padding: '2px 5px', fontSize: '10px', color: '#f87171' }}
+                              onClick={() => handleDeleteStoryScene(scene.id)}
+                              title="Delete scene"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Title Input */}
+                        <input
+                          type="text"
+                          value={scene.title ?? ''}
+                          placeholder="Scene Headline Title..."
+                          style={{
+                            background: 'rgba(0,0,0,0.25)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#fff',
+                            fontSize: '11px',
+                            padding: '4px 6px',
+                          }}
+                          onChange={(e) => handleUpdateStoryScene(scene.id, { title: e.target.value })}
+                        />
+
+                        {/* Subtitle Input */}
+                        <input
+                          type="text"
+                          value={scene.subtitle ?? ''}
+                          placeholder="Supporting Subtitle..."
+                          style={{
+                            background: 'rgba(0,0,0,0.25)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#cbd5e1',
+                            fontSize: '10px',
+                            padding: '3px 6px',
+                          }}
+                          onChange={(e) => handleUpdateStoryScene(scene.id, { subtitle: e.target.value })}
+                        />
+
+                        {/* Caption Textarea */}
+                        <textarea
+                          rows={2}
+                          value={scene.caption ?? ''}
+                          placeholder="Story / Travelogue commentary..."
+                          style={{
+                            background: 'rgba(0,0,0,0.25)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#e2e8f0',
+                            fontSize: '10px',
+                            padding: '4px 6px',
+                            resize: 'none',
+                          }}
+                          onChange={(e) => handleUpdateStoryScene(scene.id, { caption: e.target.value })}
+                        />
+
+                        {/* Controls Row: Mode & Intent */}
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <select
+                            value={scene.intent ?? 'travel'}
+                            style={{
+                              flex: 1,
+                              background: 'var(--bg-card)',
+                              border: '1px solid var(--border-subtle)',
+                              color: '#fff',
+                              fontSize: '10px',
+                              padding: '2px 4px',
+                              borderRadius: '3px',
+                            }}
+                            onChange={(e) => handleUpdateStoryScene(scene.id, { intent: e.target.value as SceneIntent })}
+                          >
+                            <option value="establishing">Establishing</option>
+                            <option value="travel">Travel</option>
+                            <option value="stop">Stop</option>
+                            <option value="highlight">Highlight</option>
+                            <option value="arrival">Arrival</option>
+                          </select>
+
+                          <button
+                            className="btn-ghost"
+                            style={{ fontSize: '10px', padding: '2px 6px' }}
+                            onClick={() => {
+                              targetSceneIdForMedia.current = scene.id;
+                              sceneMediaInputRef.current?.click();
+                            }}
+                            title="Attach photo to scene"
+                          >
+                            📷 + Photo
+                          </button>
+                        </div>
+
+                        {/* Attached Media List */}
+                        {scene.media && scene.media.length > 0 && (
+                          <div className="scene-media-row">
+                            {scene.media.map((med) => (
+                              <div key={med.id} style={{ position: 'relative' }}>
+                                <img
+                                  src={med.url}
+                                  alt={med.filename}
+                                  className="scene-thumb"
+                                  title={`${med.title ?? med.filename}${med.geoPosition?.ele ? ` (${med.geoPosition.ele}m)` : ''}`}
+                                />
+                                <button
+                                  style={{
+                                    position: 'absolute',
+                                    top: '-4px',
+                                    right: '-4px',
+                                    background: '#ef4444',
+                                    border: 'none',
+                                    borderRadius: '50%',
+                                    color: '#fff',
+                                    width: '14px',
+                                    height: '14px',
+                                    fontSize: '9px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                  }}
+                                  onClick={() => handleRemoveMedia(med.id)}
+                                  title="Remove photo"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             ) : (
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                 No custom keyframes. Click &quot;✨ AutoCam&quot; to synthesize a cinematic camera sequence.
@@ -1985,17 +2406,20 @@ export default function App() {
             style={{ width: `${(currentTime / effectiveDuration) * 100}%` }}
           />
           <div className="timeline-scene-markers">
-            {journey.timeline.scenes.map((scene) => (
-              <div
-                key={scene.id}
-                className="scene-block"
-                style={{
-                  width: `${(scene.endPercent - scene.startPercent) * 100}%`,
-                }}
-              >
-                {scene.name} ({scene.cameraMode})
-              </div>
-            ))}
+            {journey.timeline.scenes.map((scene) => {
+              const startPct = scene.startPercent ?? (scene.startTime != null ? scene.startTime / effectiveDuration : 0);
+              const endPct = scene.endPercent ?? (scene.endTime != null ? scene.endTime / effectiveDuration : 1);
+              const widthPct = Math.max(0, Math.min(100, (endPct - startPct) * 100));
+              return (
+                <div
+                  key={scene.id}
+                  className="scene-block"
+                  style={{ width: `${widthPct}%` }}
+                >
+                  {scene.name} ({scene.cameraMode})
+                </div>
+              );
+            })}
           </div>
           <div
             className="timeline-playhead"

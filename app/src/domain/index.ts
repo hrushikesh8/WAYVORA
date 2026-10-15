@@ -9,3 +9,5 @@ export * from './diagnostics';
 export * from './routing';
 export * from './elevation';
 export * from './camera';
+export * from './story/media';
+export * from './story/evaluator';
