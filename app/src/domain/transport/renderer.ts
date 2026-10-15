@@ -11,6 +11,7 @@ import {
   resolveCanonicalTransportMode,
   TRANSPORT_MODE_METADATA,
   type CanonicalTransportMode,
+  type TransportRenderMode,
 } from './types';
 import { loadTransportSvgImage } from './icons';
 
@@ -42,6 +43,25 @@ export async function registerTransportIcons(map: MapLibreMap): Promise<void> {
 }
 
 /**
+ * Options for attaching transport layers to MapLibre.
+ */
+export interface AttachTransportLayersOptions {
+  modelLayer?: any;
+  renderMode?: TransportRenderMode;
+}
+
+/**
+ * Options for synchronizing transport layers each frame.
+ */
+export interface SyncTransportOptions {
+  modelLayer?: any;
+  groundElevation?: number;
+  elevationDelta?: number;
+  distanceDeltaMeters?: number;
+  renderMode?: TransportRenderMode;
+}
+
+/**
  * Idempotently attaches the transport source and rendering layers to a MapLibre instance.
  * Re-executed upon every `style.load` event to survive style switching.
  */
@@ -49,7 +69,8 @@ export function attachTransportMapLayers(
   map: MapLibreMap,
   initialPosition?: RoutePoint | null,
   initialBearing: number = 0,
-  initialMode: TransportMode = 'car'
+  initialMode: TransportMode = 'car',
+  options?: AttachTransportLayersOptions
 ): void {
   if (!map) return;
 
@@ -169,23 +190,70 @@ export function attachTransportMapLayers(
       // Ignore
     }
   }
+
+  // 5. Optional 3D Model Custom Layer
+  if (options?.modelLayer) {
+    const layer = options.modelLayer;
+    if (!map.getLayer(layer.id)) {
+      try {
+        map.addLayer(layer);
+      } catch (err) {
+        console.warn('Transport3DModelLayer attach notice:', err);
+      }
+    }
+    if (options.renderMode) {
+      layer.setRenderMode?.(options.renderMode);
+    }
+  }
 }
 
 /**
- * Synchronizes position, bearing, and active transport mode into the MapLibre transport source.
+ * Synchronizes position, bearing, and active transport mode into the MapLibre transport layers.
+ * Coordinates 2D symbol visibility and 3D custom layer pose.
  */
 export function syncTransportSourceData(
   map: MapLibreMap,
   position?: RoutePoint | null,
   bearing: number = 0,
-  mode: TransportMode | string = 'car'
+  mode: TransportMode | string = 'car',
+  options?: SyncTransportOptions
 ): void {
   if (!map || !position) return;
 
+  const canonicalMode = resolveCanonicalTransportMode(mode);
+
+  // Synchronize 3D model custom layer if provided
+  if (options?.modelLayer) {
+    const ml = options.modelLayer;
+    if (options.renderMode) {
+      ml.setRenderMode?.(options.renderMode);
+    }
+    ml.updatePose?.(position, bearing, canonicalMode, {
+      groundElevation: options.groundElevation,
+      elevationDelta: options.elevationDelta,
+      distanceDeltaMeters: options.distanceDeltaMeters,
+    });
+
+    const is3DActive = ml.shouldRender3D?.();
+    const target2DVisibility = is3DActive ? 'none' : 'visible';
+
+    try {
+      if (map.getLayer(TRANSPORT_SYMBOL_LAYER_ID)) {
+        map.setLayoutProperty(TRANSPORT_SYMBOL_LAYER_ID, 'visibility', target2DVisibility);
+      }
+      if (map.getLayer(TRANSPORT_HALO_LAYER_ID)) {
+        map.setLayoutProperty(TRANSPORT_HALO_LAYER_ID, 'visibility', target2DVisibility);
+      }
+      if (map.getLayer(TRANSPORT_PULSE_LAYER_ID)) {
+        map.setLayoutProperty(TRANSPORT_PULSE_LAYER_ID, 'visibility', target2DVisibility);
+      }
+    } catch {
+      // Ignore during rapid frame updates
+    }
+  }
+
   const source = map.getSource(TRANSPORT_SOURCE_ID) as GeoJSONSource | undefined;
   if (!source || typeof source.setData !== 'function') return;
-
-  const canonicalMode = resolveCanonicalTransportMode(mode);
 
   source.setData({
     type: 'FeatureCollection',

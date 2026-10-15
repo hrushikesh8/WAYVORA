@@ -109,6 +109,10 @@ import {
   resolveCanonicalTransportMode,
   TRANSPORT_MODE_METADATA,
   CANONICAL_TRANSPORT_MODES,
+  Transport3DModelLayer,
+  type TransportRenderMode,
+  has3DModelAsset,
+  getModelDefinition,
 } from './domain/transport';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
@@ -213,6 +217,15 @@ export default function App() {
   const [isTerrain3dEnabled, setIsTerrain3dEnabled] = useState(true);
   const [terrainExaggeration, setTerrainExaggeration] = useState(1.2);
   const [terrainStatus, setTerrainStatus] = useState<'ready' | 'fallback' | 'disabled'>('ready');
+
+  // 3D Transport Model State
+  const [transportRenderMode, setTransportRenderMode] = useState<TransportRenderMode>('auto');
+  const transportRenderModeRef = useRef<TransportRenderMode>(transportRenderMode);
+  transportRenderModeRef.current = transportRenderMode;
+  const transport3dLayerRef = useRef<Transport3DModelLayer | null>(null);
+  if (!transport3dLayerRef.current && typeof window !== 'undefined') {
+    transport3dLayerRef.current = new Transport3DModelLayer({ renderMode: transportRenderMode });
+  }
 
   // Mutable refs keeping map event handlers synchronized with latest React state
   const currentMapStyleRef = useRef<MapStyleId>(DEFAULT_MAP_STYLE_ID);
@@ -400,6 +413,8 @@ export default function App() {
         currentPosition: currentFrameRef.current?.position,
         currentBearing: currentFrameRef.current?.bearing ?? 0,
         currentMode: currentFrameRef.current?.activeTransportMode ?? 'car',
+        modelLayer: transport3dLayerRef.current,
+        transportRenderMode: transportRenderModeRef.current,
       });
 
       fitMapToBounds(map, getAllPoints(journeyRef.current));
@@ -464,10 +479,15 @@ export default function App() {
     const { position, bearing } = currentFrame;
     const activeMode = currentFrame.activeTransportMode || 'car';
     const canonical = resolveCanonicalTransportMode(activeMode);
+    const is3DActive = transport3dLayerRef.current?.shouldRender3D() ?? false;
 
     const map = mapInstanceRef.current;
     if (map && map.isStyleLoaded()) {
-      syncTransportSourceData(map, position, bearing, activeMode);
+      syncTransportSourceData(map, position, bearing, activeMode, {
+        modelLayer: transport3dLayerRef.current,
+        groundElevation: position.ele ?? 0,
+        renderMode: transportRenderMode,
+      });
     }
 
     if (markerRef.current) {
@@ -475,6 +495,8 @@ export default function App() {
       const markerEl = markerRef.current.getElement();
       if (markerEl) {
         markerEl.style.transform = `rotate(${bearing}deg)`;
+        markerEl.style.opacity = is3DActive ? '0' : '1';
+        markerEl.style.pointerEvents = is3DActive ? 'none' : 'auto';
         if (markerEl.dataset.mode !== canonical) {
           markerEl.dataset.mode = canonical;
           markerEl.innerHTML = getTransportSvg(canonical, { size: 38 });
@@ -1065,7 +1087,12 @@ export default function App() {
             map,
             frame.position,
             frame.bearing,
-            frame.transportMode || 'car'
+            frame.transportMode || 'car',
+            {
+              modelLayer: transport3dLayerRef.current,
+              groundElevation: frame.position?.ele ?? 0,
+              renderMode: transportRenderModeRef.current,
+            }
           );
           await new Promise((r) => requestAnimationFrame(r));
           return map.getCanvas();
@@ -1099,7 +1126,12 @@ export default function App() {
         map,
         currentFrame.position,
         currentFrame.bearing,
-        currentFrame.activeTransportMode || 'car'
+        currentFrame.activeTransportMode || 'car',
+        {
+          modelLayer: transport3dLayerRef.current,
+          groundElevation: currentFrame.position?.ele ?? 0,
+          renderMode: transportRenderModeRef.current,
+        }
       );
     }
     const mapCanvas = map ? map.getCanvas() : null;
@@ -3230,6 +3262,96 @@ export default function App() {
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4' }}>
               <strong style={{ color: 'var(--text-secondary)' }}>Attribution:</strong> {getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}
             </div>
+          </div>
+
+          {/* 3D Transport Model Director */}
+          <div className="control-group">
+            <div className="control-header">
+              <span>Transport Model Director</span>
+              <span style={{
+                fontSize: '10px',
+                fontWeight: 600,
+                color: transportRenderMode === '2d-icon'
+                  ? 'var(--text-muted)'
+                  : (has3DModelAsset(resolveCanonicalTransportMode(currentFrame.activeTransportMode || 'car')) ? '#38bdf8' : '#fbbf24')
+              }}>
+                {transportRenderMode === '2d-icon'
+                  ? '2D Icons Forced'
+                  : (has3DModelAsset(resolveCanonicalTransportMode(currentFrame.activeTransportMode || 'car'))
+                      ? `3D (${resolveCanonicalTransportMode(currentFrame.activeTransportMode || 'car').toUpperCase()})`
+                      : `2D (${resolveCanonicalTransportMode(currentFrame.activeTransportMode || 'car').toUpperCase()} Fallback)`)}
+              </span>
+            </div>
+
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '5px' }}>
+              Rendering Mode
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', marginBottom: '8px' }}>
+              {(['auto', '3d-model', '2d-icon'] as TransportRenderMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  className={`btn-ghost ${transportRenderMode === mode ? 'active' : ''}`}
+                  style={{ fontSize: '10px', padding: '5px 2px', justifyContent: 'center', textAlign: 'center' }}
+                  onClick={() => {
+                    setTransportRenderMode(mode);
+                    if (transport3dLayerRef.current) {
+                      transport3dLayerRef.current.setRenderMode(mode);
+                    }
+                    showNotification(
+                      mode === '3d-model'
+                        ? 'Transport: 3D Models (Preferred)'
+                        : mode === 'auto'
+                        ? 'Transport: Auto (3D + 2D Fallback)'
+                        : 'Transport: 2D Icons (Forced)'
+                    );
+                  }}
+                >
+                  {mode === '3d-model' ? '🏎 3D Model' : mode === 'auto' ? '✨ Auto' : '🎯 2D Icon'}
+                </button>
+              ))}
+            </div>
+
+            {/* Active Model Status & Legal Attribution */}
+            {(() => {
+              const activeMode = resolveCanonicalTransportMode(currentFrame.activeTransportMode || 'car');
+              const def = getModelDefinition(activeMode);
+              const hasAsset = has3DModelAsset(activeMode);
+              const meta = TRANSPORT_MODE_METADATA[activeMode];
+              return (
+                <div style={{
+                  fontSize: '10px',
+                  background: 'rgba(0,0,0,0.35)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '6px',
+                  padding: '8px',
+                  lineHeight: '1.4'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Active Mode:</span>
+                    <strong style={{ color: meta.accentColor }}>{meta.label}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Asset Status:</span>
+                    <span style={{ color: (hasAsset && transportRenderMode !== '2d-icon') ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                      {transportRenderMode === '2d-icon'
+                        ? '🎯 2D Vector Silhouette'
+                        : hasAsset
+                        ? '✓ 3D glTF Model Active'
+                        : 'ℹ Deterministic 2D Fallback'}
+                    </span>
+                  </div>
+                  <div style={{
+                    color: 'var(--text-muted)',
+                    fontSize: '9px',
+                    borderTop: '1px solid rgba(255,255,255,0.08)',
+                    paddingTop: '4px',
+                    marginTop: '4px'
+                  }}>
+                    <strong style={{ color: 'var(--text-secondary)' }}>Licensing:</strong> {def.attribution}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="control-group">

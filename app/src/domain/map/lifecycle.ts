@@ -17,6 +17,8 @@ import {
   syncTransportSourceData,
 } from '../transport';
 
+import type { TransportRenderMode } from '../transport';
+
 export interface AttachLayersOptions {
   terrainEnabled?: boolean;
   terrainExaggeration?: number;
@@ -26,6 +28,8 @@ export interface AttachLayersOptions {
   currentPosition?: RoutePoint | null;
   currentBearing?: number;
   currentMode?: TransportMode;
+  modelLayer?: any;
+  transportRenderMode?: TransportRenderMode;
 }
 
 export const TERRARIUM_DEM_URL =
@@ -156,13 +160,17 @@ export function attachJourneyMapLayers(
     : null;
   syncSegmentPointsData(map, activeSegment, options.selectedPointIndex ?? null);
 
-  // 6. Transport Marker Layers (Pulsing halo disc & rotating SVG silhouette)
+  // 6. Transport Marker Layers (Pulsing halo disc, rotating SVG silhouette, & optional 3D model)
   const initialMode = journey.segments[0]?.transportMode ?? 'car';
   attachTransportMapLayers(
     map,
     options.currentPosition ?? allPoints[0] ?? null,
     options.currentBearing ?? 0,
-    options.currentMode ?? initialMode
+    options.currentMode ?? initialMode,
+    {
+      modelLayer: options.modelLayer,
+      renderMode: options.transportRenderMode,
+    }
   );
   registerTransportIcons(map);
 

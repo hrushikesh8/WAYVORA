@@ -178,8 +178,16 @@ export function resolveCanonicalTransportMode(
 }
 
 /**
+ * User-selectable rendering mode for transport markers.
+ * - 'auto': Use 3D model when registered & loaded, 2D vector silhouette otherwise.
+ * - '3d-model': Prefer 3D model, fallback to 2D only if asset fails to load.
+ * - '2d-icon': Force crisp 2D vector silhouette across all modes.
+ */
+export type TransportRenderMode = 'auto' | '3d-model' | '2d-icon';
+
+/**
  * Explicit state of an animated transport entity at a specific point in time.
- * Designed with a direct 2D/3D fallback contract for future 3D model integration.
+ * Designed with a direct 2D/3D fallback contract.
  */
 export interface TransportEntityState {
   mode: CanonicalTransportMode;
@@ -188,5 +196,8 @@ export interface TransportEntityState {
   pitch: number;
   roll?: number;
   isDwelling: boolean;
-  renderMode: '2d-svg' | '3d-model-fallback';
+  renderMode: '2d-svg' | '3d-model' | '3d-model-fallback';
+  modelId?: string;
+  altitudeMeters?: number;
 }
+
