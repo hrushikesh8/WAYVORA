@@ -15,8 +15,9 @@ import type {
   TransportMode,
   ProvenanceMetadata,
 } from './types';
-import { segmentTypeForMode } from './types';
+import { segmentTypeForMode, generateId } from './types';
 import { haversineDistance } from './geo';
+import type { RouteResult } from './routing/types';
 
 export class EditError extends Error {
   constructor(message: string) {
@@ -419,3 +420,149 @@ export function redoEditorHistory(history: EditorHistory): EditorHistory {
     maxHistory: history.maxHistory,
   };
 }
+
+/**
+ * Applies a verified road routing result to an existing segment.
+ * Replaces the segment geometry with high-resolution road points while:
+ * - Preserving all other segments (especially GPX trail tracks) untouched.
+ * - Recording routing metadata and provenance ('sourceFormat: osrm').
+ * - Preserving or updating attached stop positions at segment boundaries.
+ * - Enforcing that routeResult must be successful and have >= 2 points.
+ */
+export function applyRouteToSegment(
+  journey: Journey,
+  segmentId: string,
+  routeResult: RouteResult
+): Journey {
+  if (!routeResult.success || !routeResult.points || routeResult.points.length < 2) {
+    throw new EditError(
+      `Cannot apply routing: provider failed or returned fewer than 2 points. (${routeResult.error?.message ?? 'No valid geometry'})`
+    );
+  }
+
+  const segIndex = journey.segments.findIndex((s) => s.id === segmentId);
+  if (segIndex === -1) {
+    throw new EditError(`Segment not found with id: ${segmentId}`);
+  }
+
+  const existingSeg = journey.segments[segIndex];
+
+  // Clone existing metadata and provenance
+  const prevMeta = existingSeg.metadata ?? {};
+  const prevProv = typeof prevMeta.provenance === 'object' && prevMeta.provenance !== null
+    ? (prevMeta.provenance as Record<string, unknown>)
+    : {};
+
+  const updatedSegment: JourneySegment = {
+    ...existingSeg,
+    type: 'road',
+    sourceFormat: 'osrm',
+    points: [...routeResult.points],
+    metadata: {
+      ...prevMeta,
+      isModified: true,
+      lastModifiedAt: new Date().toISOString(),
+      routing: {
+        providerId: routeResult.metadata.providerId,
+        providerName: routeResult.metadata.providerName,
+        profile: routeResult.metadata.profile,
+        retrievedAt: routeResult.metadata.retrievedAt,
+        distanceMetres: routeResult.distanceMetres,
+        durationSeconds: routeResult.durationSeconds,
+        attribution: routeResult.metadata.attribution,
+        version: routeResult.metadata.version,
+      },
+      provenance: {
+        ...prevProv,
+        source: 'routed',
+        routedBy: routeResult.metadata.providerId,
+        routedAt: routeResult.metadata.retrievedAt,
+        routedDistanceMetres: routeResult.distanceMetres,
+        routedDurationSeconds: routeResult.durationSeconds,
+      },
+    },
+  };
+
+  const newSegments = [...journey.segments];
+  newSegments[segIndex] = updatedSegment;
+
+  // Synchronize stop positions that belong to this segment
+  const updatedStops = journey.stops.map((stop) => {
+    if (stop.segmentIndex === segIndex && existingSeg.points.length > 0) {
+      const firstPt = routeResult.points[0];
+      const lastPt = routeResult.points[routeResult.points.length - 1];
+      const distToFirst = haversineDistance(stop.position, existingSeg.points[0]);
+      const distToLast = haversineDistance(stop.position, existingSeg.points[existingSeg.points.length - 1]);
+
+      if (distToFirst < 100) {
+        return { ...stop, position: { ...firstPt } };
+      } else if (distToLast < 100) {
+        return { ...stop, position: { ...lastPt } };
+      }
+    }
+    return stop;
+  });
+
+  return {
+    ...journey,
+    segments: newSegments,
+    stops: updatedStops,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Creates and appends a new road segment from a routing result.
+ */
+export function createRoutedSegment(
+  journey: Journey,
+  routeResult: RouteResult,
+  mode: TransportMode = 'car'
+): { journey: Journey; newSegmentId: string } {
+  if (!routeResult.success || !routeResult.points || routeResult.points.length < 2) {
+    throw new EditError(
+      `Cannot create routed segment: provider failed or returned fewer than 2 points. (${routeResult.error?.message ?? 'No valid geometry'})`
+    );
+  }
+
+  const newSegmentId = generateId();
+  const newSegment: JourneySegment = {
+    id: newSegmentId,
+    type: 'road',
+    transportMode: mode,
+    sourceFormat: 'osrm',
+    points: [...routeResult.points],
+    metadata: {
+      isModified: false,
+      routing: {
+        providerId: routeResult.metadata.providerId,
+        providerName: routeResult.metadata.providerName,
+        profile: routeResult.metadata.profile,
+        retrievedAt: routeResult.metadata.retrievedAt,
+        distanceMetres: routeResult.distanceMetres,
+        durationSeconds: routeResult.durationSeconds,
+        attribution: routeResult.metadata.attribution,
+        version: routeResult.metadata.version,
+      },
+      provenance: {
+        source: 'routed',
+        routedBy: routeResult.metadata.providerId,
+        routedAt: routeResult.metadata.retrievedAt,
+        routedDistanceMetres: routeResult.distanceMetres,
+        routedDurationSeconds: routeResult.durationSeconds,
+      },
+    },
+  };
+
+  const updatedJourney: Journey = {
+    ...journey,
+    segments: [...journey.segments, newSegment],
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    journey: updatedJourney,
+    newSegmentId,
+  };
+}
+

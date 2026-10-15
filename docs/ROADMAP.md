@@ -69,13 +69,39 @@
 - [x] Strict TypeScript build passing (`tsc -b && vite build`)
 - [x] End-to-end browser smoke test verified with WebP recording and screenshot artifacts
 
-## Phase 3: Routing Services & Multi-Modal Routing
-**Status**: PROPOSED
+## Phase 3: Geographic Intelligence and Road Routing
+**Status**: VERIFIED & COMPLETE (2026-10-15)
 
-- OSRM road routing integration for road segments (free public demo API)
-- Valhalla / BRouter fallback options
-- Great-circle air route computation for flights and sea passages
-- Elevation profile enhancement via open elevation services
+- [x] Provider Research & Comparative Analysis (`docs/research/ROUTING_OPTIONS.md`):
+  - Rigorous evaluation of OSRM, Valhalla, and GraphHopper across geometry quality, rate limits, licensing, costs, and operational trade-offs.
+  - Recorded ADR-008 for provider-independent adapter architecture.
+- [x] Provider-Independent Routing Adapter Contract (`app/src/domain/routing/`):
+  - `RoutingAdapter` interface with typed `RouteRequest`, `RouteResult`, `RoutingProviderMetadata`, and `RouteErrorDetails`.
+  - `MockRoutingProvider`: Deterministic offline fixture generator supporting custom geometries, curvature synthesis, and simulated error codes (`NO_ROUTE`, `TIMEOUT`, `NETWORK_ERROR`).
+  - `OsrmRoutingProvider`: Standard OSRM v1 REST integration supporting GeoJSON LineString coordinate extraction, configurable base URLs, custom fetch injection, polite timeouts, and HTTP status code handling (429 rate limiting, 500 server errors, malformed payloads).
+- [x] Non-Destructive Road Segment Integration (`app/src/domain/editor.ts`):
+  - `applyRouteToSegment`: Replaces road segment geometry with high-resolution route points without touching other segments or GPX trail tracks.
+  - `createRoutedSegment`: Appends new road segments derived from routing results.
+  - Provenance tracking (`sourceFormat: 'osrm'`, provider ID, retrieval timestamp, routed distance/duration).
+  - Synchronizes attached stop positions at segment boundaries.
+  - Full undo/redo and project serialization preservation.
+- [x] Geographic Quality Diagnostics Module (`app/src/domain/diagnostics.ts`):
+  - Coordinate validation (lat [-90, 90], lng [-180, 180], NaN checks).
+  - Single-point segment detection (< 2 points error).
+  - Consecutive duplicate point detection (< 0.1m warning).
+  - Sparse 2-point route detection (> 50km info).
+  - Segment boundary continuity audit (distance gaps > 100m warning).
+  - Elevation coverage percentage and honest gain/loss calculation (never invents missing elevation).
+  - Implausible vertical elevation jump and extreme slope warnings (> 500m / 100m).
+  - Suspicious negative elevation warnings (< -430m).
+- [x] Studio UI Integration (`app/src/App.tsx`, `app/src/index.css`):
+  - Segment editor "Road Routing Engine" box with travel profile selector (`driving`, `cycling`, `walking`) and "Route via OSRM" button.
+  - Non-destructive route confirmation card ("Apply to Segment" / "Cancel") showing distance, road points, and duration.
+  - Error banner with one-click "Try Offline Mock Route" fallback.
+  - Geographic Diagnostics panel in Metadata tab with Health Status Badge, metrics breakdown, and audit findings list.
+- [x] Automated Testing Suite: 117 tests passing across 10 test suites (including 11 routing tests and 12 diagnostics tests).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~427ms).
+- [x] End-to-end browser smoke test verified: OSRM live routing query returned 3,678 road points across 118.3 km, applied to Segment #1, verified undo, and captured WebP recording.
 
 
 ## Phase 2: Camera & Scene System

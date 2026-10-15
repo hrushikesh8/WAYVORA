@@ -139,3 +139,22 @@ a proprietary API key. flyover_routes also depends on Mapbox.
 - MapLibre is the community fork of Mapbox GL v1, fully BSD-3-Clause.
 - All essential features (3D terrain, globe, vector tiles) are available in MapLibre.
 - Mapbox-specific features (Standard style, 3D landmarks) are not needed for v1.
+
+---
+
+## ADR-008: Provider-Independent Road Routing Adapter Contract
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**: Coarse road waypoints require high-resolution geometry snapped to real-world highway networks. Available engines include OSRM, Valhalla, and GraphHopper. Public demonstration endpoints have strict rate limits and zero SLAs, while commercial hosted endpoints require API keys and credit cards.
+
+**Decision**:
+Define a clean, provider-independent `RoutingAdapter` interface with typed `RouteRequest` and `RouteResult` data structures. Implement a deterministic `MockRoutingProvider` for offline testing and an `OsrmRoutingProvider` for live road routing (using standard OSRM v1 REST protocol with configurable base URLs and strict timeout/error handling). Never couple the pure journey domain directly to an HTTP endpoint.
+
+**Rationale**:
+- Decouples the pure domain model and unit tests from external networks.
+- Enables seamless switching between public testing endpoints (OSRM demo) and production self-hosted Docker containers or commercial providers (Valhalla / Stadia Maps / GraphHopper).
+- Explicitly captures routing metadata, attribution, distance, duration, and error details without silent failures or fabricated paths.
+- Preserves trail segments and imported GPX tracks completely intact when re-routing road segments.
+

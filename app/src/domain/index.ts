@@ -5,3 +5,5 @@ export * from './timeline';
 export * from './serialization';
 export * from './gpx';
 export * from './editor';
+export * from './diagnostics';
+export * from './routing';

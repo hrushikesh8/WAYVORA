@@ -21,6 +21,7 @@ import {
   updateStop,
   deleteStop,
   updateSegmentMode,
+  applyRouteToSegment,
   createEditorHistory,
   pushEditorHistory,
   undoEditorHistory,
@@ -30,6 +31,13 @@ import {
   getSegmentEditAudit,
   type EditorHistory,
 } from './domain/editor';
+import {
+  OsrmRoutingProvider,
+  MockRoutingProvider,
+  type RouteResult,
+  type RoutingProfile,
+} from './domain/routing';
+import { auditJourneyDiagnostics } from './domain/diagnostics';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -97,6 +105,12 @@ export default function App() {
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [stopDwellEnabled, setStopDwellEnabled] = useState(true);
 
+  // Road Routing State
+  const [routingProfile, setRoutingProfile] = useState<RoutingProfile>('driving');
+  const [routingStatus, setRoutingStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [pendingRoute, setPendingRoute] = useState<{ segmentId: string; result: RouteResult } | null>(null);
+  const [routingError, setRoutingError] = useState<string | null>(null);
+
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<Map | null>(null);
@@ -108,6 +122,7 @@ export default function App() {
   // Derived metrics
   const allPoints = useMemo(() => getAllPoints(journey), [journey]);
   const journeyTotalDistance = useMemo(() => totalDistance(allPoints), [allPoints]);
+  const diagnosticsReport = useMemo(() => auditJourneyDiagnostics(journey), [journey]);
 
   const activeJourney = useMemo(
     () => ({
@@ -538,6 +553,69 @@ export default function App() {
       alert(err instanceof Error ? err.message : String(err));
     }
   };
+
+  // Road Routing Action Handlers
+  const handleRequestRoadRoute = async (segmentId: string, useMockFallback = false) => {
+    const seg = journey.segments.find((s) => s.id === segmentId);
+    if (!seg || seg.points.length < 2) {
+      showNotification('Segment must have at least 2 points to calculate a road route.');
+      return;
+    }
+
+    const origin = seg.points[0];
+    const destination = seg.points[seg.points.length - 1];
+
+    setRoutingStatus('loading');
+    setRoutingError(null);
+    setPendingRoute(null);
+
+    const provider = useMockFallback
+      ? new MockRoutingProvider()
+      : new OsrmRoutingProvider({ timeoutMs: 8000 });
+
+    try {
+      const result = await provider.calculateRoute({
+        origin: { lat: origin.lat, lng: origin.lng, ele: origin.ele },
+        destination: { lat: destination.lat, lng: destination.lng, ele: destination.ele },
+        profile: routingProfile,
+      });
+
+      if (result.success && result.points.length >= 2) {
+        setRoutingStatus('success');
+        setPendingRoute({ segmentId, result });
+        showNotification(
+          `Road route calculated: ${(result.distanceMetres / 1000).toFixed(1)} km (${result.points.length} points)`
+        );
+      } else {
+        setRoutingStatus('error');
+        const errMsg = result.error?.message ?? 'Failed to calculate road route.';
+        setRoutingError(errMsg);
+        showNotification(`Routing error: ${errMsg}`);
+      }
+    } catch (err: unknown) {
+      setRoutingStatus('error');
+      const errMsg = err instanceof Error ? err.message : 'Unknown routing error';
+      setRoutingError(errMsg);
+      showNotification(`Routing error: ${errMsg}`);
+    }
+  };
+
+  const handleApplyPendingRoute = () => {
+    if (!pendingRoute) return;
+    try {
+      const updated = applyRouteToSegment(journey, pendingRoute.segmentId, pendingRoute.result);
+      applyJourneyEdit(
+        updated,
+        `Applied road route: ${(pendingRoute.result.distanceMetres / 1000).toFixed(1)} km via ${pendingRoute.result.metadata.providerName}`
+      );
+      setPendingRoute(null);
+      setRoutingStatus('idle');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to apply route';
+      showNotification(msg);
+    }
+  };
+
 
   // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y)
   useEffect(() => {
@@ -1023,7 +1101,95 @@ export default function App() {
                             </button>
                           </div>
 
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                          {/* Road Routing Engine Action Box */}
+                          <div className="routing-action-box" onClick={(e) => e.stopPropagation()}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: '#00f2fe' }}>
+                                🧭 Road Routing Engine
+                              </span>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                {routingStatus === 'loading' ? 'Routing...' : 'OSRM Provider'}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <select
+                                style={{
+                                  background: 'rgba(0,0,0,0.5)',
+                                  color: '#fff',
+                                  border: '1px solid var(--border-subtle)',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  padding: '2px 4px',
+                                  flex: 1,
+                                }}
+                                value={routingProfile}
+                                onChange={(e) => setRoutingProfile(e.target.value as RoutingProfile)}
+                              >
+                                <option value="driving">Driving (Car)</option>
+                                <option value="cycling">Cycling (Bike)</option>
+                                <option value="walking">Walking (Foot)</option>
+                              </select>
+                              <button
+                                className="btn-primary"
+                                style={{ fontSize: '10px', padding: '4px 8px' }}
+                                disabled={routingStatus === 'loading' || seg.points.length < 2}
+                                onClick={() => handleRequestRoadRoute(seg.id, false)}
+                                title="Query OSRM for real highway route between first and last point"
+                              >
+                                {routingStatus === 'loading' ? 'Routing...' : 'Route via OSRM'}
+                              </button>
+                            </div>
+
+                            {routingError && (
+                              <div style={{ fontSize: '10px', color: '#f87171', marginTop: '4px', lineHeight: '1.4' }}>
+                                <span>⚠ {routingError}</span>
+                                <div style={{ marginTop: '4px' }}>
+                                  <button
+                                    className="btn-ghost"
+                                    style={{ fontSize: '10px', padding: '2px 6px', color: '#38bdf8' }}
+                                    onClick={() => handleRequestRoadRoute(seg.id, true)}
+                                    title="Try calculating deterministic mock route without network"
+                                  >
+                                    Try Offline Mock Route
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {pendingRoute && pendingRoute.segmentId === seg.id && (
+                              <div className="route-confirmation-card">
+                                <div style={{ fontSize: '11px', color: '#34d399', fontWeight: 500 }}>
+                                  ✓ Route Ready: {(pendingRoute.result.distanceMetres / 1000).toFixed(1)} km ({pendingRoute.result.points.length} road points)
+                                </div>
+                                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                  {pendingRoute.result.durationSeconds ? `Est. ${Math.round(pendingRoute.result.durationSeconds / 60)} min · ` : ''}
+                                  {pendingRoute.result.metadata.attribution}
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                                  <button
+                                    className="btn-primary"
+                                    style={{ fontSize: '10px', padding: '3px 8px', flex: 1 }}
+                                    onClick={handleApplyPendingRoute}
+                                  >
+                                    Apply to Segment
+                                  </button>
+                                  <button
+                                    className="btn-ghost"
+                                    style={{ fontSize: '10px', padding: '3px 8px' }}
+                                    onClick={() => {
+                                      setPendingRoute(null);
+                                      setRoutingStatus('idle');
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', marginTop: '8px' }}>
                             Select point to inspect / edit:
                           </div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '100px', overflowY: 'auto', marginBottom: '8px' }}>
@@ -1113,19 +1279,86 @@ export default function App() {
                 })}
               </>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px' }}>
-                <div className="control-header">Project Info</div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  Name: <strong>{journey.name}</strong>
+              <div className="diagnostics-panel">
+                <div className="control-header">Geographic Diagnostics</div>
+
+                {/* Health Status Badge */}
+                <div
+                  className={`diagnostics-badge ${
+                    !diagnosticsReport.isValid
+                      ? 'diagnostics-badge-error'
+                      : diagnosticsReport.hasWarnings
+                      ? 'diagnostics-badge-warning'
+                      : 'diagnostics-badge-valid'
+                  }`}
+                >
+                  <span>
+                    {!diagnosticsReport.isValid
+                      ? `✕ ${diagnosticsReport.errorCount} Error(s) Found`
+                      : diagnosticsReport.hasWarnings
+                      ? `⚠ ${diagnosticsReport.warningCount} Quality Warning(s)`
+                      : '✓ All Geometries Valid & Continuous'}
+                  </span>
                 </div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  Created: <strong>{new Date(journey.createdAt).toLocaleDateString()}</strong>
+
+                {/* Metrics Breakdown Grid */}
+                <div className="gpx-summary-grid">
+                  <div className="gpx-stat-card">
+                    <span className="stat-label">Total Distance</span>
+                    <span className="stat-value">{(diagnosticsReport.metrics.totalDistanceMetres / 1000).toFixed(2)} km</span>
+                  </div>
+                  <div className="gpx-stat-card">
+                    <span className="stat-label">Total Points</span>
+                    <span className="stat-value">{diagnosticsReport.metrics.totalPoints}</span>
+                  </div>
+                  <div className="gpx-stat-card">
+                    <span className="stat-label">Elevation Coverage</span>
+                    <span className="stat-value">{diagnosticsReport.metrics.elevationCoveragePct}%</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      +{diagnosticsReport.metrics.elevationGainMetres}m / -{diagnosticsReport.metrics.elevationLossMetres}m
+                    </span>
+                  </div>
+                  <div className="gpx-stat-card">
+                    <span className="stat-label">Boundary Continuity</span>
+                    <span className="stat-value">
+                      {diagnosticsReport.metrics.boundaryGapsCount === 0
+                        ? 'Continuous'
+                        : `${diagnosticsReport.metrics.boundaryGapsCount} Gap(s)`}
+                    </span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      Max: {diagnosticsReport.metrics.maxBoundaryGapMetres > 0 ? `${(diagnosticsReport.metrics.maxBoundaryGapMetres / 1000).toFixed(2)}km` : '0m'}
+                    </span>
+                  </div>
                 </div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  Timeline Duration: <strong>{journey.timeline.duration}s @ {journey.timeline.fps} FPS</strong>
-                </div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  Effective Duration (with Dwell): <strong>{effectiveDuration.toFixed(1)}s</strong>
+
+                {/* Issues List */}
+                {diagnosticsReport.issues.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                      Audit Findings ({diagnosticsReport.issues.length}):
+                    </div>
+                    <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {diagnosticsReport.issues.map((issue, idx) => (
+                        <div
+                          key={idx}
+                          className={`diagnostic-issue-item ${
+                            issue.severity === 'error'
+                              ? 'diagnostic-issue-error'
+                              : issue.severity === 'warning'
+                              ? 'diagnostic-issue-warning'
+                              : 'diagnostic-issue-info'
+                          }`}
+                        >
+                          <strong>[{issue.code}]</strong> {issue.message}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '8px', color: 'var(--text-muted)', fontSize: '11px' }}>
+                  <div>Duration: <strong>{journey.timeline.duration}s</strong> (Effective: <strong>{effectiveDuration.toFixed(1)}s</strong>)</div>
+                  <div>FPS: <strong>{journey.timeline.fps}</strong> · Created: <strong>{new Date(journey.createdAt).toLocaleDateString()}</strong></div>
                 </div>
               </div>
             )}
