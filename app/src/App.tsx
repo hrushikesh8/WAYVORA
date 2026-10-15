@@ -58,6 +58,18 @@ import {
   generateAutoCamKeyframes,
   type CameraClearanceResult,
 } from './domain/camera';
+import {
+  exportJourneyVideo,
+  downloadExportBlob,
+  compositeRenderFrame,
+  evaluateRenderFrame,
+  isWebCodecsSupported,
+  isSupportedVideoFormat,
+  synchronizeVideoElement,
+  type ExportJobConfig,
+  type ExportProgress,
+  type ExportResult,
+} from './domain/render';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -114,8 +126,16 @@ export default function App() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('overview');
   const [mapPitch, setMapPitch] = useState(45);
   const [mapZoom, setMapZoom] = useState(11);
-  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'stats'>('stops');
+  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'stats' | 'export'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
+
+  // Video Export State
+  const [selectedExportProfileIndex, setSelectedExportProfileIndex] = useState(0);
+  const [exportFps, setExportFps] = useState(30);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const exportAbortControllerRef = useRef<AbortController | null>(null);
 
   // GPX Import State
   const [gpxResult, setGpxResult] = useState<GpxParseResult | null>(null);
@@ -221,7 +241,8 @@ export default function App() {
       zoom: 10,
       pitch: 45,
       bearing: 0,
-    });
+      preserveDrawingBuffer: true,
+    } as any);
 
     mapInstanceRef.current = map;
 
@@ -737,12 +758,16 @@ export default function App() {
     const sceneId = targetSceneIdForMedia.current;
     if (!file || !sceneId) return;
 
+    const isVideo = isSupportedVideoFormat(file.name, file.type);
     const reader = new FileReader();
     reader.onload = () => {
       const buffer = reader.result as ArrayBuffer;
-      const exif = parseJpegExif(buffer);
+      const exif = isVideo ? { hasExif: false } : parseJpegExif(buffer);
       const blobUrl = URL.createObjectURL(file);
       const asset = createMediaAsset(file.name, blobUrl, {
+        type: isVideo ? 'video' : 'photo',
+        mimeType: file.type,
+        sizeBytes: file.size,
         title: file.name.replace(/\.[^/.]+$/, ''),
         geoPosition: exif.geoPosition,
         timestamp: exif.capturedAt,
@@ -753,7 +778,7 @@ export default function App() {
       const updated = attachMediaToScene(journey, sceneId, asset);
       applyJourneyEdit(
         updated,
-        `Attached photo: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
+        `Attached ${isVideo ? 'video' : 'photo'}: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
       );
     };
     reader.readAsArrayBuffer(file);
@@ -765,12 +790,16 @@ export default function App() {
     const stopId = targetStopIdForMedia.current;
     if (!file || !stopId) return;
 
+    const isVideo = isSupportedVideoFormat(file.name, file.type);
     const reader = new FileReader();
     reader.onload = () => {
       const buffer = reader.result as ArrayBuffer;
-      const exif = parseJpegExif(buffer);
+      const exif = isVideo ? { hasExif: false } : parseJpegExif(buffer);
       const blobUrl = URL.createObjectURL(file);
       const asset = createMediaAsset(file.name, blobUrl, {
+        type: isVideo ? 'video' : 'photo',
+        mimeType: file.type,
+        sizeBytes: file.size,
         title: file.name.replace(/\.[^/.]+$/, ''),
         geoPosition: exif.geoPosition,
         timestamp: exif.capturedAt,
@@ -781,7 +810,7 @@ export default function App() {
       const updated = attachMediaToStop(journey, stopId, asset);
       applyJourneyEdit(
         updated,
-        `Attached photo to stop: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
+        `Attached ${isVideo ? 'video' : 'photo'} to stop: ${file.name}${exif.geoPosition?.ele ? ` (${exif.geoPosition.ele}m EXIF)` : ''}`
       );
     };
     reader.readAsArrayBuffer(file);
@@ -790,7 +819,130 @@ export default function App() {
 
   const handleRemoveMedia = (mediaId: string) => {
     const updated = removeMedia(journey, mediaId);
-    applyJourneyEdit(updated, 'Photo removed');
+    applyJourneyEdit(updated, 'Media removed');
+  };
+
+  // Video Export Profiles and Dispatchers
+  const exportProfiles: ExportJobConfig[] = useMemo(() => [
+    {
+      profileName: 'YouTube 1080p',
+      width: 1920,
+      height: 1080,
+      fps: exportFps,
+      bitrateMbps: 8,
+      codec: 'h264',
+      aspectRatio: '16:9',
+    },
+    {
+      profileName: 'TikTok / Reels 9:16',
+      width: 1080,
+      height: 1920,
+      fps: exportFps,
+      bitrateMbps: 6,
+      codec: 'h264',
+      aspectRatio: '9:16',
+    },
+    {
+      profileName: 'Instagram Square 1:1',
+      width: 1080,
+      height: 1080,
+      fps: exportFps,
+      bitrateMbps: 6,
+      codec: 'h264',
+      aspectRatio: '1:1',
+    },
+    {
+      profileName: 'Fast Draft 720p',
+      width: 1280,
+      height: 720,
+      fps: exportFps,
+      bitrateMbps: 4,
+      codec: 'h264',
+      aspectRatio: '16:9',
+    },
+  ], [exportFps]);
+
+  const handleStartExport = async () => {
+    const config = exportProfiles[selectedExportProfileIndex];
+    if (!config) return;
+
+    setIsExporting(true);
+    setExportResult(null);
+    setExportProgress({
+      currentFrame: 0,
+      totalFrames: Math.ceil(effectiveDuration * config.fps),
+      percent: 0,
+      phase: 'preparing',
+      elapsedMs: 0,
+      estimatedRemainingMs: 0,
+      message: 'Initializing video encoder...',
+    });
+
+    const abortController = new AbortController();
+    exportAbortControllerRef.current = abortController;
+
+    try {
+      const result = await exportJourneyVideo(activeJourney, {
+        config,
+        abortSignal: abortController.signal,
+        onProgress: (prog) => {
+          setExportProgress(prog);
+        },
+        getMapCanvas: async (frame) => {
+          const map = mapInstanceRef.current;
+          if (!map) return null;
+          map.jumpTo({
+            center: [frame.camera.center.lng, frame.camera.center.lat],
+            bearing: frame.camera.bearing,
+            pitch: frame.camera.pitch,
+            zoom: frame.camera.zoom,
+          });
+          await new Promise((r) => requestAnimationFrame(r));
+          return map.getCanvas();
+        },
+      });
+
+      setExportResult(result);
+      showNotification(`Video exported successfully! (${(result.sizeBytes / 1024 / 1024).toFixed(1)} MB)`);
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        showNotification('Video export cancelled');
+      } else {
+        alert(err instanceof Error ? err.message : 'Export failed');
+      }
+    } finally {
+      setIsExporting(false);
+      exportAbortControllerRef.current = null;
+    }
+  };
+
+  const handleCancelExport = () => {
+    if (exportAbortControllerRef.current) {
+      exportAbortControllerRef.current.abort();
+    }
+  };
+
+  const handleCaptureFramePng = () => {
+    const map = mapInstanceRef.current;
+    const mapCanvas = map ? map.getCanvas() : null;
+    const renderFrame = evaluateRenderFrame(activeJourney, currentTime, {
+      width: 1920,
+      height: 1080,
+      fps: 30,
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = 1920;
+    canvas.height = 1080;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    compositeRenderFrame(ctx, renderFrame, { mapCanvas });
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const timeCode = Math.round(currentTime).toString().padStart(3, '0');
+        downloadExportBlob(blob, `wayvora_frame_${timeCode}s.png`);
+        showNotification('Captured 1080p frame PNG!');
+      }
+    }, 'image/png');
   };
 
   // Route Editing Dispatchers
@@ -1184,7 +1336,8 @@ export default function App() {
           </button>
           <button
             className="btn-primary"
-            onClick={() => showNotification('Exporting 4K cinematic video render pipeline...')}
+            onClick={() => setActiveTab('export')}
+            title="Open video export & rendering studio"
           >
             <span>Render Video</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -1222,6 +1375,12 @@ export default function App() {
               onClick={() => setActiveTab('stats')}
             >
               Metadata
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'export' ? 'active' : ''}`}
+              onClick={() => setActiveTab('export')}
+            >
+              🎬 Export
             </button>
           </div>
 
@@ -1730,6 +1889,157 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {activeTab === 'export' && (
+              <div className="export-panel">
+                <div className="section-label">
+                  <span>Video Export & Deterministic Renderer</span>
+                </div>
+
+                {/* Profile Selector */}
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Resolution & Aspect Ratio:
+                  </div>
+                  <div className="export-profile-grid">
+                    {exportProfiles.map((p, idx) => (
+                      <div
+                        key={p.profileName}
+                        className={`profile-card ${selectedExportProfileIndex === idx ? 'active' : ''}`}
+                        onClick={() => setSelectedExportProfileIndex(idx)}
+                      >
+                        <span className="profile-name">{p.profileName}</span>
+                        <span className="profile-dims">{p.width}×{p.height} ({p.aspectRatio})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Framerate Selector */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Framerate:</span>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button
+                      className={`btn-ghost ${exportFps === 30 ? 'active' : ''}`}
+                      style={{ padding: '2px 8px', fontSize: '11px' }}
+                      onClick={() => setExportFps(30)}
+                    >
+                      30 FPS
+                    </button>
+                    <button
+                      className={`btn-ghost ${exportFps === 60 ? 'active' : ''}`}
+                      style={{ padding: '2px 8px', fontSize: '11px' }}
+                      onClick={() => setExportFps(60)}
+                    >
+                      60 FPS
+                    </button>
+                  </div>
+                </div>
+
+                {/* Codec Engine Status */}
+                <div style={{
+                  fontSize: '11px',
+                  padding: '8px',
+                  background: 'rgba(0,0,0,0.3)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span>Encoder Engine:</span>
+                  <span style={{ color: isWebCodecsSupported() ? '#34d399' : '#fbbf24', fontWeight: 600 }}>
+                    {isWebCodecsSupported() ? '✓ Hardware WebCodecs (MP4 H.264)' : '⚠ MediaRecorder (WebM Fallback)'}
+                  </span>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                  <button
+                    className="btn-primary"
+                    style={{ justifyContent: 'center', padding: '8px 12px', fontSize: '12px' }}
+                    disabled={isExporting}
+                    onClick={handleStartExport}
+                  >
+                    {isExporting ? '⏳ Rendering Frames...' : '🎬 Render & Export Video'}
+                  </button>
+                  <button
+                    className="btn-ghost"
+                    style={{ justifyContent: 'center', padding: '6px 12px', fontSize: '11px' }}
+                    onClick={handleCaptureFramePng}
+                    title="Export the currently paused frame as 1080p PNG snapshot"
+                  >
+                    🖼 Capture 1080p Frame PNG
+                  </button>
+                </div>
+
+                {/* Live Export Progress Card */}
+                {isExporting && exportProgress && (
+                  <div className="export-progress-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-cyan)' }}>
+                        Phase: {exportProgress.phase.toUpperCase()}
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#fff' }}>
+                        {exportProgress.percent}%
+                      </span>
+                    </div>
+
+                    <div className="export-progress-bar-bg">
+                      <div
+                        className="export-progress-bar-fill"
+                        style={{ width: `${exportProgress.percent}%` }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                      <span>Frame {exportProgress.currentFrame} / {exportProgress.totalFrames}</span>
+                      <span>
+                        {exportProgress.estimatedRemainingMs > 0
+                          ? `~${Math.round(exportProgress.estimatedRemainingMs / 1000)}s left`
+                          : 'Finalizing...'}
+                      </span>
+                    </div>
+
+                    <button
+                      className="btn-ghost"
+                      style={{ fontSize: '10px', padding: '3px 8px', color: '#f87171', alignSelf: 'flex-end' }}
+                      onClick={handleCancelExport}
+                    >
+                      Cancel Export
+                    </button>
+                  </div>
+                )}
+
+                {/* Export Result Card */}
+                {exportResult && !isExporting && (
+                  <div className="export-result-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#34d399' }}>
+                        ✓ Export Ready ({Math.round(exportResult.totalFrames)} frames)
+                      </span>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        {(exportResult.sizeBytes / (1024 * 1024)).toFixed(2)} MB
+                      </span>
+                    </div>
+
+                    <video
+                      controls
+                      src={URL.createObjectURL(exportResult.blob)}
+                      style={{ width: '100%', maxHeight: '140px', borderRadius: '4px', background: '#000' }}
+                    />
+
+                    <button
+                      className="btn-primary"
+                      style={{ justifyContent: 'center', padding: '6px 10px', fontSize: '11px' }}
+                      onClick={() => downloadExportBlob(exportResult.blob, exportResult.filename)}
+                    >
+                      ⬇ Download {exportResult.filename}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </aside>
 
@@ -1754,30 +2064,62 @@ export default function App() {
             </div>
           )}
 
-          {currentFrame.storyState?.activeMedia && currentFrame.storyState.activeMedia.length > 0 && (
-            <div className="floating-photo-card">
-              <img
-                src={currentFrame.storyState.activeMedia[0].url}
-                alt={currentFrame.storyState.activeMedia[0].filename}
-              />
-              <div className="photo-info">
-                <strong>{currentFrame.storyState.activeMedia[0].title ?? currentFrame.storyState.activeMedia[0].filename}</strong>
-                {currentFrame.storyState.activeMedia[0].caption && (
-                  <div>{currentFrame.storyState.activeMedia[0].caption}</div>
+          {currentFrame.storyState?.activeMedia && currentFrame.storyState.activeMedia.length > 0 && (() => {
+            const asset = currentFrame.storyState.activeMedia[0];
+            const isVideo = isSupportedVideoFormat(asset.filename, asset.mimeType);
+            const sceneStart = currentFrame.storyState.activeScene?.startTime ?? 0;
+            const videoTime = Math.max(0, currentTime - sceneStart);
+
+            if (asset.isMissing) {
+              return (
+                <div className="floating-photo-card missing-card">
+                  <div className="missing-media-placeholder">
+                    <span>⚠ Media File Missing</span>
+                    <small>{asset.filename}</small>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="floating-photo-card">
+                {isVideo ? (
+                  <video
+                    src={asset.url}
+                    className="media-video-content"
+                    playsInline
+                    muted
+                    ref={(el) => {
+                      if (el) synchronizeVideoElement(el, videoTime, isPlaying);
+                    }}
+                  />
+                ) : (
+                  <img
+                    src={asset.url}
+                    alt={asset.filename}
+                    onError={() => {
+                      asset.isMissing = true;
+                    }}
+                  />
                 )}
-                <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
-                  {currentFrame.storyState.activeMedia[0].geoPosition?.ele != null && (
-                    <span className="exif-badge">⛰️ {currentFrame.storyState.activeMedia[0].geoPosition?.ele}m</span>
-                  )}
-                  {currentFrame.storyState.activeMedia[0].timestamp && (
-                    <span className="exif-badge">
-                      🕒 {new Date(currentFrame.storyState.activeMedia[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
+                <div className="photo-info">
+                  <strong>{asset.title ?? asset.filename}</strong>
+                  {asset.caption && <div>{asset.caption}</div>}
+                  <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+                    {asset.geoPosition?.ele != null && (
+                      <span className="exif-badge">⛰️ {Math.round(asset.geoPosition.ele)}m</span>
+                    )}
+                    {asset.timestamp && (
+                      <span className="exif-badge">
+                        🕒 {new Date(asset.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                    {isVideo && <span className="exif-badge video-badge">▶ Video</span>}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {currentFrame.storyState?.transition && (
             <div
@@ -1795,14 +2137,14 @@ export default function App() {
           <input
             type="file"
             ref={sceneMediaInputRef}
-            accept="image/*"
+            accept="image/*,video/mp4,video/webm"
             style={{ display: 'none' }}
             onChange={handleSceneMediaSelected}
           />
           <input
             type="file"
             ref={stopMediaInputRef}
-            accept="image/*"
+            accept="image/*,video/mp4,video/webm"
             style={{ display: 'none' }}
             onChange={handleStopMediaSelected}
           />

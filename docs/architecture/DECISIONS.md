@@ -235,6 +235,39 @@ Define a clean, provider-independent `RoutingAdapter` interface with typed `Rout
 - Preserving authentic EXIF provenance guarantees that photo placement along the route is faithful to real-world capture conditions.
 - Separating story overlays from camera keyframes and geographic route segments allows users to freely edit narrative copy and timing without corrupting route points or map geometry.
 
+---
+
+## ADR-012: Deterministic Render-Frame Contract, Media Synchronization, and Hardware WebCodecs Export
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**: Transitioning WAYVORA from an interactive geographic/cinematic studio into an actual travel video production engine requires a formal, frame-by-frame rendering foundation. Interactive playback relies on `requestAnimationFrame` and browser wall-clock scheduling, which cannot guarantee zero-drop frame rates or reproducible offline exports. Furthermore, users require multimedia support (both photographs and HTML5 video assets), clear handling of missing or moved assets without silent fabrication, and a reliable MP4 video export path within the browser without cloud dependencies or massive server rendering costs.
+
+**Decision**:
+1. **Unified RenderFrame Contract (`app/src/domain/render/types.ts`, `contract.ts`)**:
+   - Establish `RenderFrame` composing spatial traveler state (coordinates, heading, progress, segment), cinematic camera pose (center, bearing, pitch, zoom, eye position, altitude, mode), narrative story overlays (active scene, title, subtitle, caption, active media, transitions), and resource readiness.
+   - Formally document determinism boundaries: mathematical coordinates, camera angles, stop dwell timing, and story copy are 100% mathematically deterministic, while WebGL tile rasterization, DEM elevation sampling, font glyph rendering, and hardware video encoders depend on local browser/GPU runtime state.
+2. **Media Playback & Resource Lifecycle Management (`app/src/domain/render/mediaManager.ts`)**:
+   - Support both standard image formats (`.jpg`, `.png`, `.webp`) and HTML5 video formats (`.mp4`, `.webm`).
+   - Synchronize HTML5 `<video>` playback timing to $(t - \text{scene.startTime})$ with muted seeking and autoplay policy safeguards.
+   - Implement `mediaRegistry` to track and clean up session blob URLs, preventing browser memory leaks.
+   - **Missing Asset Diagnostics**: If a referenced media file is missing or unreadable, mark `isMissing: true` and display a clear diagnostic badge (`⚠ Media File Missing: [filename]`) rather than silently substituting unrelated media.
+3. **Offscreen Canvas Compositor (`app/src/domain/render/canvasCompositor.ts`)**:
+   - Pure 2D canvas drawing pipeline layering the MapLibre WebGL canvas (enabled via `preserveDrawingBuffer: true`), scene transitions, floating photo/video cards with authentic EXIF metadata tags, centered cinematic title cards, lower-third travelogue caption bars, and technical timecode HUDs.
+4. **Deterministic Frame-by-Frame Video Exporter (`app/src/domain/render/exporter.ts`)**:
+   - Step through the timeline on a fixed-step grid $\Delta t = 1 / \text{fps}$ from $t = 0$ to $t = \text{duration}$, completely detached from wall-clock time.
+   - **Primary Engine**: Hardware WebCodecs `VideoEncoder` + `mp4-muxer` (MIT) producing standard seekable H.264 MP4 files directly in the browser with microsecond presentation timestamps.
+   - **Fallback Engine**: `MediaRecorder` canvas stream producing WebM files on browsers lacking WebCodecs.
+   - Provide full `AbortSignal` cancellation, frame-level backpressure management, and asynchronous progress reporting.
+   - Provide in-browser video playback preview and direct file download.
+
+**Rationale**:
+- WebCodecs delivers GPU-accelerated video encoding with zero server rendering costs and zero cloud lock-in.
+- `mp4-muxer` provides a tiny (~15KB) zero-dependency, MIT-licensed muxer that writes valid MP4 containers with correct duration headers.
+- Fixed-step frame scheduling eliminates dropped frames and playback lag during video generation.
+
+
 
 
 

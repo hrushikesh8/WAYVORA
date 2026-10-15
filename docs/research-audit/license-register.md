@@ -38,7 +38,7 @@
 | typescript | ~6.0.2 | Apache-2.0 | ✅ Installed & Verified (dev) | Type checking |
 | vitest | ^5.0.4 | MIT | ✅ Installed & Verified (dev) | Unit & acceptance test suite |
 | @tmcw/togeojson | — | BSD-2-Clause | ⏳ Planned (Phase 1) | GPX/KML file parser (not yet installed) |
-| mp4-muxer | — | MIT | ⏳ Planned (Phase 2) | Video container muxing (not yet installed) |
+| mp4-muxer | ^5.2.2 | MIT | ✅ Installed & Verified | Video container muxing |
 
 ## Map Cartography & Tile Sources
 

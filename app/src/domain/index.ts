@@ -11,3 +11,4 @@ export * from './elevation';
 export * from './camera';
 export * from './story/media';
 export * from './story/evaluator';
+export * from './render';

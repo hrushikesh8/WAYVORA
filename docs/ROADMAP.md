@@ -209,14 +209,55 @@
 - [x] Strict TypeScript build passing (`tsc -b && vite build` in ~473ms).
 - [x] End-to-end browser smoke test verified: AutoStory synthesis, story scene editing, canvas title card and caption bar overlays, playhead synchronization, and recording (`phase6_story_media_smoke_1792049294905.webp`).
 
-## Phase 7: Deterministic Video Export (WebCodecs)
+## Phase 7: Media Playback and Deterministic Rendering Foundation
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Unified RenderFrame Contract (`app/src/domain/render/types.ts`, `contract.ts`):
+  - Typed `RenderFrame` composing spatial traveler state (position, bearing, progress, segment), cinematic camera pose (center, bearing, pitch, zoom, eye position, altitude, mode), story overlays (scene, title, subtitle, caption, active media, transitions), and resource readiness.
+  - Formal determinism classification (`classifyDeterminism`): defines mathematical determinism (coordinates, angles, dwell progress, copy) vs environmental factors (WebGL GPU rasterization, network tile caches, font metrics, hardware encoders).
+  - Pure mathematical evaluator `evaluateRenderFrame(journey, timeSeconds, options)` guaranteeing bitwise identical output on repeated seeks.
+  - Generator `generateRenderFrames(journey, options)` producing sequential frames on a fixed-step grid ($\Delta t = 1 / \text{fps}$) with zero frame drops or timing drift.
+- [x] Media Playback & Resource Lifecycle Management (`app/src/domain/render/mediaManager.ts`):
+  - Multi-format asset detection: supports image formats (`.jpg`, `.png`, `.webp`) and video formats (`.mp4`, `.webm`).
+  - Active playback resolution (`resolveMediaPlayback`): computes media time offset within active scene and visibility bounds.
+  - Synchronized HTML5 video element control (`synchronizeVideoElement`): muted seeking and play/pause handling with zero unhandled autoplay rejections.
+  - Session ObjectURL lifecycle management (`mediaRegistry`): tracks and revokes temporary blob URLs to avoid browser memory leaks.
+  - Graceful missing asset diagnostics: marks `isMissing: true` with error messages rather than silently substituting unrelated files.
+- [x] Offscreen Canvas Compositor (`app/src/domain/render/canvasCompositor.ts`):
+  - 2D canvas drawing pipeline:
+    - Base map rendering from MapLibre canvas (enabled via `preserveDrawingBuffer: true`) or cinematic fallback gradient.
+    - Scene transitions (mathematical alpha fade/dissolve).
+    - Floating media cards with authentic EXIF metadata badges (elevation, timestamp, camera model) or missing file notice.
+    - Glassmorphic cinematic title cards with uppercase title and subtitle.
+    - Lower-third travelogue caption bars with gold accent icons.
+    - Technical HUD overlay (timecode, spatial progress %, resolution watermark).
+- [x] Deterministic Video Export Pipeline (`app/src/domain/render/exporter.ts`):
+  - Frame-by-frame rendering decoupled from real-time playback speed.
+  - Primary hardware encoder: WebCodecs `VideoEncoder` + `mp4-muxer` (MIT) producing standard seekable H.264 MP4 video blobs with microsecond presentation timestamps.
+  - Fallback encoder: `MediaRecorder` canvas capture stream producing WebM video.
+  - Full `AbortSignal` cancellation support and frame backpressure handling.
+  - Asynchronous progress callback: percent, current frame, elapsed time, and estimated remaining time.
+  - In-browser blob download helper (`downloadExportBlob`).
+- [x] Studio UI Integration (`app/src/App.tsx`, `app/src/index.css`):
+  - Added dedicated **🎬 Export** tab to studio sidebar tabs.
+  - Export profile selector: YouTube 1080p, TikTok / Reels 9:16, Instagram Square 1:1, Fast Draft 720p.
+  - Framerate selector (30 FPS / 60 FPS) and hardware encoder status badge.
+  - Action buttons: "🎬 Render & Export Video" and "🖼 Capture 1080p Frame PNG".
+  - Live export progress card with animated progress bar and Cancel button.
+  - Export Ready result card with in-app playable `<video controls>` preview and direct MP4 download button.
+  - Viewport floating media card upgraded with HTML5 `<video>` synchronization and missing media placeholder.
+- [x] Automated Unit Test Suite: 172 tests passing across 14 test suites (including 14 comprehensive tests in `app/src/__tests__/render.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~470ms).
+- [x] End-to-end browser smoke test verified: Export panel, Fast Draft 720p profile, 1080p PNG snapshot, deterministic 900-frame video export (0.18 MB MP4), playable video preview, and recording (`phase7_render_export_smoke_1792050897331.webp`).
+
+## Phase 8: Audio Synchronization, Narration & Final Production Polish
 **Status**: PROPOSED
 
-- WebCodecs + `mp4-muxer` frame-by-frame offline rendering pipeline
-- Canvas frame capture with zero frame drops
-- Multiple aspect ratios (16:9 landscape, 9:16 vertical reels/shorts, 1:1 square)
-- Resolution selection (720p, 1080p, 4K)
-- Export progress bar and offline video preview
+- Ambient audio track and background music synchronization
+- Audio fade-in/fade-out at scene transitions
+- Narration voiceover audio track integration
+- Web Audio API mixer for video export muxing
+- Final performance optimization and mobile responsiveness polish
 
 ## Non-Goals (Explicit)
 
