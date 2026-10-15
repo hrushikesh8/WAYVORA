@@ -41,48 +41,45 @@ export interface TransportModelDefinition {
 export const TRANSPORT_MODEL_REGISTRY: Record<CanonicalTransportMode, TransportModelDefinition> = {
   car: {
     mode: 'car',
-    name: 'Touring Sedan Car',
+    name: 'WAYVORA Procedural Touring Sedan',
     category: 'road',
-    modelUrl: '/models/car.glb',
+    modelUrl: undefined, // Verified in-house procedural 3D model
     scale: 3.5, // Scaled for high cinematic visibility from flyover camera
     rotationOffset: [90, 0, 0], // glTF Y-up to MapLibre Z-up
     elevationOffsetMeters: 0.25,
     maxPitchDegrees: 25,
-    license: 'CC-BY 4.0 / Blender glTF Community',
-    attribution: 'Low-poly road automobile asset via Khronos glTF Blender I/O (CC-BY 4.0)',
-    author: 'Khronos & Blender 3D Community',
-    sourceUrl: 'https://github.com/KhronosGroup/glTF-Sample-Assets',
+    license: 'MIT (Original Procedural 3D Mesh)',
+    attribution: 'WAYVORA Studio Procedural 3D Touring Sedan (MIT)',
+    author: 'WAYVORA Studio',
     status: 'registered',
   },
   airplane: {
     mode: 'airplane',
     name: 'Commercial Airliner Flight',
     category: 'air',
-    modelUrl: '/models/airplane.glb',
+    modelUrl: undefined,
     scale: 2.2,
     rotationOffset: [90, 0, 0],
     elevationOffsetMeters: 45.0, // High cruise altitude above terrain
     maxPitchDegrees: 18,
-    license: 'CC-BY 4.0 / Blender glTF Community',
-    attribution: 'Low-poly passenger airliner asset via Khronos glTF Blender I/O (CC-BY 4.0)',
-    author: 'Khronos & Blender 3D Community',
-    sourceUrl: 'https://github.com/KhronosGroup/glTF-Sample-Assets',
-    status: 'registered',
+    license: 'MIT (Original Vector Silhouette)',
+    attribution: 'WAYVORA Studio 2D Vector Silhouette (MIT)',
+    author: 'WAYVORA Studio',
+    status: 'fallback-only',
   },
   boat: {
     mode: 'boat',
-    name: 'Nautical Vessel (Watercraft / Duck)',
+    name: 'Nautical Vessel (Watercraft)',
     category: 'water',
-    modelUrl: '/models/duck.glb',
-    scale: 18.0,
-    rotationOffset: [0, 0, -90], // Model native orientation adjustment
+    modelUrl: undefined,
+    scale: 1.0,
+    rotationOffset: [0, 0, 0],
     elevationOffsetMeters: 0.0,
     maxPitchDegrees: 10,
-    license: 'Public Domain / Open Sample Asset',
-    attribution: 'Khronos Sample Model (Sony Computer Entertainment Inc. / Khronos Group)',
-    author: 'Sony Computer Entertainment Inc.',
-    sourceUrl: 'https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Duck',
-    status: 'registered',
+    license: 'MIT (Original Vector Silhouette)',
+    attribution: 'WAYVORA Studio 2D Vector Silhouette (MIT)',
+    author: 'WAYVORA Studio',
+    status: 'fallback-only',
   },
   bus: {
     mode: 'bus',
@@ -168,7 +165,7 @@ export function getModelDefinition(mode: CanonicalTransportMode): TransportModel
  */
 export function has3DModelAsset(mode: CanonicalTransportMode): boolean {
   const def = TRANSPORT_MODEL_REGISTRY[mode];
-  return Boolean(def && def.modelUrl && def.status === 'registered');
+  return Boolean(def && def.status === 'registered');
 }
 
 /**

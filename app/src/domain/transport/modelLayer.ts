@@ -129,6 +129,17 @@ export class Transport3DModelLayer implements CustomLayerInterface {
       return this.modelCache.get(mode) ?? null;
     }
 
+    // Car uses verified in-house procedural 3D model
+    if (mode === 'car') {
+      const carGroup = createProceduralCarGroup();
+      this.modelCache.set('car', carGroup);
+      if (this.currentMode === 'car' && this.activeModelGroup) {
+        this.syncActiveModelGroup();
+      }
+      this.map?.triggerRepaint();
+      return carGroup;
+    }
+
     const def = getModelDefinition(mode);
     if (!def.modelUrl || def.status !== 'registered' || typeof window === 'undefined') {
       return null;
@@ -384,3 +395,83 @@ export function extractMapLibreProjectionMatrix(
   }
   return null;
 }
+
+/**
+ * Creates an original, procedural, low-poly 3D touring car model in Three.js.
+ * 100% in-house authored under WAYVORA MIT license; zero third-party assets or external network dependencies.
+ */
+export function createProceduralCarGroup(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'wayvora-procedural-car';
+
+  // Materials
+  const chassisMaterial = new THREE.MeshStandardMaterial({
+    color: 0x0284c7, // Vibrant cyan-blue
+    metalness: 0.6,
+    roughness: 0.25,
+  });
+  const cabinMaterial = new THREE.MeshStandardMaterial({
+    color: 0x0f172a, // Deep tinted glass
+    metalness: 0.8,
+    roughness: 0.15,
+  });
+  const wheelMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.8,
+  });
+  const headlightMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    emissive: 0xf8fafc,
+    emissiveIntensity: 1.5,
+  });
+  const taillightMaterial = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xef4444,
+    emissiveIntensity: 1.2,
+  });
+
+  // Lower chassis
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.55, 3.8), chassisMaterial);
+  chassis.position.set(0, 0.45, 0);
+  chassis.castShadow = true;
+  group.add(chassis);
+
+  // Aerodynamic cabin (tapered top)
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 2.1), cabinMaterial);
+  cabin.position.set(0, 0.95, -0.2);
+  cabin.castShadow = true;
+  group.add(cabin);
+
+  // Front headlights (facing forward: -Z)
+  const headlightGeom = new THREE.BoxGeometry(0.35, 0.12, 0.08);
+  const leftHeadlight = new THREE.Mesh(headlightGeom, headlightMaterial);
+  leftHeadlight.position.set(-0.6, 0.5, -1.91);
+  const rightHeadlight = new THREE.Mesh(headlightGeom, headlightMaterial);
+  rightHeadlight.position.set(0.6, 0.5, -1.91);
+  group.add(leftHeadlight, rightHeadlight);
+
+  // Rear taillights (facing backward: +Z)
+  const taillightGeom = new THREE.BoxGeometry(0.35, 0.12, 0.08);
+  const leftTaillight = new THREE.Mesh(taillightGeom, taillightMaterial);
+  leftTaillight.position.set(-0.6, 0.5, 1.91);
+  const rightTaillight = new THREE.Mesh(taillightGeom, taillightMaterial);
+  rightTaillight.position.set(0.6, 0.5, 1.91);
+  group.add(leftTaillight, rightTaillight);
+
+  // 4 Wheels
+  const wheelGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.28, 16);
+  wheelGeom.rotateZ(Math.PI / 2);
+
+  const wheelFL = new THREE.Mesh(wheelGeom, wheelMaterial);
+  wheelFL.position.set(-0.95, 0.35, -1.2);
+  const wheelFR = new THREE.Mesh(wheelGeom, wheelMaterial);
+  wheelFR.position.set(0.95, 0.35, -1.2);
+  const wheelRL = new THREE.Mesh(wheelGeom, wheelMaterial);
+  wheelRL.position.set(-0.95, 0.35, 1.2);
+  const wheelRR = new THREE.Mesh(wheelGeom, wheelMaterial);
+  wheelRR.position.set(0.95, 0.35, 1.2);
+  group.add(wheelFL, wheelFR, wheelRL, wheelRR);
+
+  return group;
+}
+

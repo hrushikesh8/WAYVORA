@@ -52,12 +52,12 @@ describe('Phase 3: 3D Transport Model Engine', () => {
     });
 
     it('distinguishes between modes with registered 3D assets and 2D fallback-only modes', () => {
-      // 3D models registered with assets
+      // Car is registered with verified in-house procedural 3D model
       expect(has3DModelAsset('car')).toBe(true);
-      expect(has3DModelAsset('airplane')).toBe(true);
-      expect(has3DModelAsset('boat')).toBe(true);
 
-      // Modes configured with deterministic 2D vector fallback
+      // Modes pending verified permissive 3D assets fall back honestly to 2D silhouettes
+      expect(has3DModelAsset('airplane')).toBe(false);
+      expect(has3DModelAsset('boat')).toBe(false);
       expect(has3DModelAsset('bus')).toBe(false);
       expect(has3DModelAsset('train')).toBe(false);
       expect(has3DModelAsset('hiker')).toBe(false);
@@ -75,7 +75,15 @@ describe('Phase 3: 3D Transport Model Engine', () => {
     });
 
     it('falls back to 2D silhouette if a mode has no 3D asset regardless of setting', () => {
-      const fallbackModes: CanonicalTransportMode[] = ['bus', 'train', 'hiker', 'motorcycle', 'bicycle'];
+      const fallbackModes: CanonicalTransportMode[] = [
+        'airplane',
+        'boat',
+        'bus',
+        'train',
+        'hiker',
+        'motorcycle',
+        'bicycle',
+      ];
       for (const mode of fallbackModes) {
         expect(resolveTransportRenderMode(mode, '3d-model', true)).toBe('2d-svg');
         expect(resolveTransportRenderMode(mode, 'auto', true)).toBe('2d-svg');
