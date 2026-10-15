@@ -155,6 +155,27 @@ Define a clean, provider-independent `RoutingAdapter` interface with typed `Rout
 **Rationale**:
 - Decouples the pure domain model and unit tests from external networks.
 - Enables seamless switching between public testing endpoints (OSRM demo) and production self-hosted Docker containers or commercial providers (Valhalla / Stadia Maps / GraphHopper).
-- Explicitly captures routing metadata, attribution, distance, duration, and error details without silent failures or fabricated paths.
 - Preserves trail segments and imported GPX tracks completely intact when re-routing road segments.
+
+---
+
+## ADR-009: Native MapLibre 3D Raster-DEM Terrain & Elevation Sampling Contract
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**: High-fidelity mountain visualization is essential for hiking trails and alpine road passes. Introducing external 3D renderers (e.g. Three.js / Babylon) introduces massive synchronization complexity, projection mismatches, duplicate tile-loading pipelines, and broken vector labeling. Commercial DEM tile providers (e.g. Mapbox / MapTiler) require paid API keys and usage tracking.
+
+**Decision**:
+1. Implement 3D terrain natively in MapLibre GL JS v5 using `raster-dem` with open Terrarium encoding from the AWS Open Data terrain tile repository (`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`).
+2. Establish a provider-independent `ElevationProvider` domain contract that returns typed `ElevationSample` objects with explicit provenance (source, resolution, attribution, fallback status).
+3. Strictly keep recorded GPS elevation (`RoutePoint.ele`) distinct from terrain-sampled elevation (`ElevationSample.elevationMetres`). Never invent elevation or silently overwrite recorded points.
+4. Implement a deterministic camera clearance engine that prevents camera-ground clipping through mountain terrain while following routes.
+5. Provide automatic, resilient fallback to flat 2D/2.5D cartography if 3D terrain tiles fail to load or are toggled off by the user.
+
+**Rationale**:
+- MapLibre natively deforms terrain on the GPU and drapes vector polyline layers, glows, and markers directly onto mountain slopes with zero custom depth-testing shaders.
+- AWS Open Data Terrarium tiles provide global coverage (SRTM/NED/ArcticDEM) without proprietary API keys or per-tile billing.
+- Decouples domain elevation queries from MapLibre canvas state for headless testing and export pipeline determinism.
+
 

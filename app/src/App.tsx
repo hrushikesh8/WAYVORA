@@ -38,6 +38,7 @@ import {
   type RoutingProfile,
 } from './domain/routing';
 import { auditJourneyDiagnostics } from './domain/diagnostics';
+import { evaluateCameraClearance } from './domain/camera';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -110,6 +111,11 @@ export default function App() {
   const [routingStatus, setRoutingStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [pendingRoute, setPendingRoute] = useState<{ segmentId: string; result: RouteResult } | null>(null);
   const [routingError, setRoutingError] = useState<string | null>(null);
+
+  // 3D Terrain State
+  const [isTerrain3dEnabled, setIsTerrain3dEnabled] = useState(true);
+  const [terrainExaggeration, setTerrainExaggeration] = useState(1.2);
+  const [terrainStatus, setTerrainStatus] = useState<'ready' | 'fallback' | 'disabled'>('ready');
 
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -285,6 +291,25 @@ export default function App() {
         map.getCanvas().style.cursor = '';
       });
 
+      // Add AWS Open Data Terrarium 3D Terrain Source
+      try {
+        map.addSource('terrain-source', {
+          type: 'raster-dem',
+          tiles: [
+            'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+          ],
+          tileSize: 256,
+          encoding: 'terrarium',
+          maxzoom: 15,
+        });
+
+        if (isTerrain3dEnabled) {
+          map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration });
+        }
+      } catch (err: unknown) {
+        console.warn('MapLibre 3D terrain initialization warning:', err);
+      }
+
       // Fit map to bounds
       fitMapToBounds(map, allPoints);
     });
@@ -294,6 +319,26 @@ export default function App() {
       mapInstanceRef.current = null;
     };
   }, []);
+
+  // Synchronize 3D Terrain and exaggeration
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    try {
+      if (isTerrain3dEnabled && map.getSource('terrain-source')) {
+        map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration });
+        setTerrainStatus('ready');
+      } else {
+        map.setTerrain(null);
+        setTerrainStatus(isTerrain3dEnabled ? 'fallback' : 'disabled');
+      }
+    } catch (err: unknown) {
+      console.warn('MapLibre terrain update error, falling back to 2D:', err);
+      map.setTerrain(null);
+      setTerrainStatus('fallback');
+    }
+  }, [isTerrain3dEnabled, terrainExaggeration]);
 
   // Update Route geometry when journey changes
   useEffect(() => {
@@ -307,7 +352,7 @@ export default function App() {
         properties: {},
         geometry: {
           type: 'LineString',
-          coordinates: allPoints.map(p => [p.lng, p.lat]),
+          coordinates: allPoints.map((p) => [p.lng, p.lat]),
         },
       });
     }
@@ -378,11 +423,21 @@ export default function App() {
     const map = mapInstanceRef.current;
     if (!map) return;
 
+    // Evaluate camera ground clearance to prevent clipping through mountain peaks
+    const clearance = evaluateCameraClearance(
+      position,
+      cameraMode,
+      mapPitch,
+      mapZoom,
+      position.ele
+    );
+    const effectivePitch = clearance.isClippingAverted ? clearance.clampedPitch : mapPitch;
+
     if (cameraMode === 'chase') {
       map.easeTo({
         center: [position.lng, position.lat],
         bearing: bearing,
-        pitch: mapPitch,
+        pitch: effectivePitch,
         zoom: mapZoom,
         duration: 80,
       });
@@ -390,7 +445,7 @@ export default function App() {
       map.easeTo({
         center: [position.lng, position.lat],
         bearing: bearing,
-        pitch: Math.max(60, mapPitch),
+        pitch: Math.max(60, effectivePitch),
         zoom: Math.max(14, mapZoom),
         duration: 80,
       });
@@ -1422,6 +1477,17 @@ export default function App() {
             >
               3D
             </button>
+            <button
+              className={`hud-btn ${isTerrain3dEnabled ? 'active' : ''}`}
+              title={isTerrain3dEnabled ? '3D Terrain Elevation Mesh Active' : '3D Terrain Disabled (Flat 2D)'}
+              onClick={() => {
+                const next = !isTerrain3dEnabled;
+                setIsTerrain3dEnabled(next);
+                showNotification(next ? '3D Terrain Mesh Enabled (AWS Terrarium)' : '3D Terrain Disabled');
+              }}
+            >
+              🏔
+            </button>
           </div>
 
           {/* Elevation HUD Mini Profile */}
@@ -1517,6 +1583,48 @@ export default function App() {
                   mapInstanceRef.current?.setZoom(val);
                 }}
               />
+            </div>
+          </div>
+
+          {/* 3D Terrain & Relief Director */}
+          <div className="control-group">
+            <div className="control-header">
+              <span>3D Terrain & Relief</span>
+              <span style={{ fontSize: '10px', color: isTerrain3dEnabled ? '#34d399' : 'var(--text-muted)' }}>
+                {isTerrain3dEnabled ? (terrainStatus === 'fallback' ? 'Flat Fallback' : 'Active 3D') : 'Disabled'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+              <button
+                className={`btn-ghost ${isTerrain3dEnabled ? 'active' : ''}`}
+                style={{ flex: 1, fontSize: '11px', justifyContent: 'center' }}
+                onClick={() => {
+                  const next = !isTerrain3dEnabled;
+                  setIsTerrain3dEnabled(next);
+                  showNotification(next ? '3D Terrain Mesh Enabled (AWS Terrarium)' : '3D Terrain Disabled');
+                }}
+              >
+                {isTerrain3dEnabled ? '🏔 3D Terrain: ON' : '🗺 2D Map: FLAT'}
+              </button>
+            </div>
+            {isTerrain3dEnabled && (
+              <div className="slider-row">
+                <div className="slider-labels">
+                  <span>Terrain Exaggeration</span>
+                  <span>{terrainExaggeration.toFixed(1)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.5"
+                  step="0.1"
+                  value={terrainExaggeration}
+                  onChange={(e) => setTerrainExaggeration(Number(e.target.value))}
+                />
+              </div>
+            )}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Source: AWS Open Data Terrarium DEM
             </div>
           </div>
 

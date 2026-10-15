@@ -7,3 +7,5 @@ export * from './gpx';
 export * from './editor';
 export * from './diagnostics';
 export * from './routing';
+export * from './elevation';
+export * from './camera';

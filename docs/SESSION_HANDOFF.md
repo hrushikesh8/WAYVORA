@@ -1,51 +1,51 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 3 — Geographic Intelligence and Road Routing  
+> Session: Phase 4 — Real 3D Terrain and Elevation Pipeline  
 > Date: 2026-10-15  
-> Status: Phase 3 VERIFIED · 117/117 Unit & Acceptance Tests Passing · Production Build Green · Browser Smoke Test Verified
+> Status: Phase 4 VERIFIED · 129/129 Unit & Acceptance Tests Passing · Production Build Green · Browser Smoke Test Verified
 
 ---
 
 ## 1. Executive Summary
 
-As Principal Software Engineer, the Phase 3 milestone was implemented and verified across all required layers:
+As Principal Software Engineer, the Phase 4 milestone has been implemented and verified across all required layers:
 1. **Preserved Baseline & Code Assets**:
-   - Clean Git baseline maintained from Phase 2 checkpoint `d36e8c0`.
+   - Clean Git baseline maintained from Phase 3 checkpoint `58b335f`.
    - All 17 reference repositories in `RESOURCES/` (1.78 GB, 86,104 files) preserved completely untracked and intact.
-   - All Phase 0, Phase 1, and Phase 2 features (GPX parser, inspection modal, route editor, undo/redo, deterministic stop dwell playback) continue passing 100% of tests without regressions.
-2. **Routing Provider Research & Evaluation (`docs/research/ROUTING_OPTIONS.md`)**:
-   - Compared OSRM, Valhalla, and GraphHopper across geometry precision, travel profiles, rate limits, self-hosting ease, and operational costs.
-   - Documented ADR-008 accepting a provider-independent routing adapter architecture.
-3. **Provider-Independent Routing Adapter Contract (`app/src/domain/routing/`)**:
-   - Defined `RoutingAdapter` interface with typed `RouteRequest`, `RouteResult`, `RoutingProviderMetadata`, and `RouteErrorDetails`.
-   - Implemented `MockRoutingProvider`: Deterministic offline fixture generator supporting custom geometries, curvature synthesis, and simulated error codes (`NO_ROUTE`, `TIMEOUT`, `NETWORK_ERROR`).
-   - Implemented `OsrmRoutingProvider`: Standard OSRM v1 REST client extracting high-resolution GeoJSON coordinates, configurable base URLs, custom fetch injection, polite timeouts, and HTTP status code handling (429 rate limiting, 500 server errors, malformed payloads).
-4. **Non-Destructive Road Segment Integration (`app/src/domain/editor.ts`)**:
-   - `applyRouteToSegment`: Replaces road segment geometry with high-resolution route points without touching other segments or GPX trail tracks.
-   - `createRoutedSegment`: Appends new road segments derived from routing results.
-   - Retains provenance (`sourceFormat: 'osrm'`, provider ID, retrieval timestamp, routed distance/duration).
-   - Synchronizes attached stop positions at segment boundaries.
-   - Enforces strict validation: fails with `EditError` if the provider fails or returns fewer than 2 points, never fabricating fake paths.
-5. **Geographic Quality Diagnostics Module (`app/src/domain/diagnostics.ts`)**:
-   - Comprehensive audit of journey health:
-     - `INVALID_COORDINATES`: Lat [-90, 90], Lng [-180, 180], NaN checks (Severity: 'error').
-     - `SINGLE_POINT_SEGMENT`: Any segment with < 2 points (Severity: 'error').
-     - `DUPLICATE_POINTS`: Consecutive points with distance < 0.1m (Severity: 'warning').
-     - `SPARSE_ROUTE`: 2-point line spanning > 50km without intermediate points (Severity: 'info').
-     - `DISCONTINUOUS_SEGMENT_BOUNDARY`: Distance gap > 100m between consecutive segments (Severity: 'warning').
-     - `MISSING_ELEVATIONS`: Partial coverage warning or 0% coverage info.
-     - `IMPLAUSIBLE_ELEVATION_DELTA`: Vertical jump > 1000m or steep slope > 500m / 100m (Severity: 'warning').
-     - `SUSPICIOUS_NEGATIVE_ELEVATION`: Elevation < -430m (Severity: 'warning').
-   - Accurate calculation of elevation gain and loss: sums positive climbs and negative descents only when both points have non-null elevation, strictly avoiding fabricated values.
-6. **Studio User Interface (`App.tsx`, `index.css`)**:
-   - Segment editor "Road Routing Engine" box with travel profile selector (`driving`, `cycling`, `walking`) and "Route via OSRM" button.
-   - Non-destructive route confirmation card ("Apply to Segment" / "Cancel") showing distance, road points, and duration.
-   - Error banner with one-click "Try Offline Mock Route" fallback.
-   - Geographic Diagnostics panel in Metadata tab with Health Status Badge, metrics breakdown, and audit findings list.
-7. **Testing & Verification**:
-   - 117 tests passing across 10 test suites (including 11 routing tests and 12 diagnostics tests).
-   - Production build compiles cleanly with `tsc -b && vite build` in ~427ms.
-   - End-to-end browser smoke test verified: OSRM live routing query returned 3,678 road points across 118.3 km, applied to Segment #1, verified undo, and captured WebP recording (`phase3_routing_diagnostics_smoke_1792044968999.webp`).
+   - All Phase 0 through Phase 3 capabilities (mixed road-to-trail journeys, universal GPX parser, route editor, undo/redo, stop dwell playback, OSRM routing, and geographic diagnostics) continue passing 100% of tests without regressions.
+2. **Research & Architectural Evaluation (`docs/research/TERRAIN_OPTIONS.md`, ADR-009)**:
+   - Evaluated three credible terrain approaches:
+     1. MapLibre Native 3D Raster-DEM (`raster-dem` source via WebGL vertex displacement).
+     2. Custom Three.js / WebGL Custom Layer DEM Mesh.
+     3. Point Elevation Web APIs (Open-Elevation, Open-Meteo).
+   - Selected MapLibre Native Raster-DEM with AWS Open Data Terrarium tiles (`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`).
+   - Recorded ADR-009 detailing resolution (SRTM/Copernicus 30m), licensing (Public Domain / CC0 / ODbL), zero API keys, no rate limits, and seamless vector layer draping.
+3. **Provider-Independent Elevation Sampling Contract (`app/src/domain/elevation/`)**:
+   - Defined pure domain interfaces: `ElevationCoord`, `ElevationSample`, `ElevationProvider`, `ElevationProviderMetadata`, `ElevationResolution`, `ElevationUnits`.
+   - Built mathematical decoders:
+     - Terrarium RGB decoder: $(R \cdot 256 + G + B/256) - 32768$ with sub-meter vertical precision.
+     - Mapbox RGB decoder: $(R \cdot 256^2 + G \cdot 256 + B) \cdot 0.1 - 10000$.
+     - WGS84 to Web Mercator tile index calculation (`lngLatToTile`).
+   - Implemented `MockElevationProvider`: In-memory LRU caching, missing tile/coordinate simulation, batch queries, and deterministic offline fixtures.
+   - Enforced honest elevation policy: never replaces missing elevation with invented measurements; preserves recorded GPS elevation distinct from externally sampled terrain elevation.
+4. **Real 3D Terrain Rendering in MapLibre Studio (`app/src/App.tsx`)**:
+   - Configured AWS Open Data Terrarium raster-DEM source with `encoding: 'terrarium'`.
+   - Integrated dynamic `map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration })`.
+   - Added live exaggeration slider (0.5x to 2.5x) in Right Inspector.
+   - Added resilient fallback: one-click toggle to 2D flat mode or automatic fallback when offline or tiles fail to load.
+   - Preserved route overlays: vector GeoJSON LineStrings (`route-line`, `route-glow`), segment vertices, and start/end markers automatically drape over the 3D mountain relief.
+   - Added Quick Action Map Button 🏔 with active indicator and toast notification.
+5. **Deterministic Camera Ground Clearance Engine (`app/src/domain/camera.ts`)**:
+   - Implemented Mercator ground resolution calculation (`getMetersPerPixel`).
+   - Built pure deterministic clearance evaluator `evaluateCameraClearance(...)`: calculates camera eye altitude, evaluates ground elevation at camera coordinates, detects mountain collision/subsurface clipping, and clamps pitch to maintain visual line of sight.
+   - Integrated into studio frame update loop.
+6. **Automated Testing & Production Build**:
+   - Added `app/src/__tests__/terrain.test.ts` (12 tests) covering Terrarium decode/encode roundtrip, Mapbox decode, tile coordinates, mock provider caching/fallback, batch queries, and camera clearance clipping detection.
+   - Full test suite: **129 passed / 129 tests** across 11 test suites in 702ms.
+   - Strict TypeScript build: `tsc -b && vite build` succeeded in 539ms with zero errors.
+7. **End-to-End Browser Smoke Test**:
+   - Verified 3D terrain controls, toggle OFF (2D flat fallback), toggle ON (AWS Terrarium 3D relief), Mt. Whitney Alpine Ascent preset (up to 4421m summit), and camera clearance.
+   - Video recording artifact: `phase4_terrain_elevation_smoke_1792046284962.webp`.
 
 ---
 
@@ -53,18 +53,22 @@ As Principal Software Engineer, the Phase 3 milestone was implemented and verifi
 
 ### A. VERIFIED (Empirically tested and confirmed)
 
-- **Provider-Independent Routing Architecture (`app/src/domain/routing/`)**:
-  - `RoutingAdapter` interface, `RouteRequest`, `RouteResult`, `RoutingProviderMetadata`, `RouteErrorDetails`.
-  - `MockRoutingProvider`: Deterministic offline fixture generator, curvature synthesis, simulated error handling.
-  - `OsrmRoutingProvider`: Standard OSRM v1 REST integration, GeoJSON coordinate parsing, rate-limit (HTTP 429) and timeout handling.
-- **Road Segment Routing & Provenance Retention (`app/src/domain/editor.ts`)**:
-  - `applyRouteToSegment`: Replaces explicitly selected road segment geometry with routed points, records provenance, keeps GPX trail segments completely intact.
-  - `createRoutedSegment`: Appends new road segments derived from routing results.
-  - Full undo/redo and project serialization preservation.
-- **Geographic Diagnostics Engine (`app/src/domain/diagnostics.ts`)**:
-  - Validates coordinate bounds, single-point segments, consecutive duplicates, sparse routes, boundary continuity gaps, elevation coverage, implausible vertical jumps, and suspicious negative elevations.
-  - Accurate elevation gain and loss calculation without synthesizing missing data.
-- **Automated Test Suite (117/117 Tests Passing)**:
+- **3D Raster-DEM Terrain in MapLibre (`app/src/App.tsx`)**:
+  - AWS Open Data Terrarium tiles rendered as real 3D relief mesh in WebGL canvas.
+  - Exaggeration control (0.5x to 2.5x) with live slider.
+  - Graceful fallback to 2D flat mode (`map.setTerrain(null)`).
+  - GeoJSON vector overlays (`route-line`, `route-glow`, `segment-points-layer`) draped over 3D terrain.
+  - Attribution display in inspector: "Terrain: AWS Open Data (Terrarium/Mapzen DEM)".
+- **Provider-Independent Elevation Contract (`app/src/domain/elevation/`)**:
+  - `ElevationCoord`, `ElevationSample`, `ElevationProvider`, `ElevationProviderMetadata`.
+  - Terrarium RGB & Mapbox RGB decoders.
+  - `lngLatToTile` Mercator projection.
+  - `MockElevationProvider` with cache hit/miss semantics, offline simulation, and batch queries.
+- **Deterministic Camera Clearance Engine (`app/src/domain/camera.ts`)**:
+  - `getMetersPerPixel` and `evaluateCameraClearance`.
+  - Mountain collision detection and pitch clamping.
+- **Automated Test Suite (129/129 Tests Passing)**:
+  - `terrain.test.ts` (12 tests): Pure decoder, provider caching, offline fallback, tile indexing, batch queries, camera clearance.
   - `routing.test.ts` (11 tests): Provider contracts, mock router, OSRM client, rate-limiting, error handling, non-destructive segment application, undo/redo, serialization.
   - `diagnostics.test.ts` (12 tests): Clean journey validation, invalid coordinates, single-point segments, duplicate points, sparse routes, boundary gaps, elevation coverage, implausible vertical jumps, gain/loss calculation, undo/redo diagnostic tracking, timeline determinism.
   - `editor.test.ts` (13 tests): Insertion, moving with stop synchronization, minimum 2-point deletion guard, stop edit/delete, segment mode change, undo/redo branching.
@@ -76,26 +80,24 @@ As Principal Software Engineer, the Phase 3 milestone was implemented and verifi
   - `timeline.test.ts` (7 tests): Linear timeline evaluation and frame generators.
   - `serialization.test.ts` (4 tests): Versioned `.wayvora.json` roundtripping and validation.
 - **Studio Web Interface (`App.tsx`, `index.css`)**:
-  - Road Routing Engine box with travel profile selector and "Route via OSRM" button.
-  - Route confirmation card with distance, points, and duration display.
-  - Geographic Diagnostics panel in Metadata tab with Health Status badge, metrics grid, and audit findings list.
-  - Full undo/redo integration with toast notifications.
+  - Map Right Action Bar 🏔 Terrain 3D toggle button with active glow state.
+  - Right Inspector "3D Terrain & Relief" control box with toggle button, live exaggeration slider, and dataset attribution.
+  - Toast notifications on terrain state changes.
 
 ### B. IMPLEMENTED BUT NOT VERIFIED (Working in prototype, pending real-world data integration)
 
-- **Alternative Routing Engines (Valhalla / GraphHopper)**:
-  - Contract interfaces and provider architecture are fully implemented and ready.
-  - Hosted endpoints for Valhalla and GraphHopper require commercial API keys or private Docker deployments.
+- **Mapbox RGB Raster-DEM Decoding in Production Client**:
+  - The pure decoder `decodeMapboxRgb` is implemented and verified by unit tests, but Mapbox's hosted tiles require a commercial Mapbox Access Token.
 
 ### C. BLOCKED
 
-- *None.* All Phase 3 acceptance criteria are fully unblocked and verified.
+- *None.* All Phase 4 acceptance criteria are fully unblocked and verified.
 
-### D. NOT YET IMPLEMENTED (Scheduled for Phase 4+)
+### D. NOT YET IMPLEMENTED (Scheduled for Phase 5+)
 
-- **DEM 3D Terrain Meshes**: Connecting Mapbox Terrain-DEM or AWS Terrarium raster-DEM tiles for 3D elevation displacement.
-- **AI Storytelling & Narration**: AI travelogue narration and subtitle generation.
-- **Client-Side MP4 Export**: WebCodecs / `mp4-muxer` export pipeline.
+- **Cinematic Camera Director**: Multi-mode camera sequencer (Flyover, Chase, Orbit) with spline keyframes.
+- **Media & Annotations**: Photo attachments to stops and dynamic playback callouts.
+- **Deterministic MP4 Export**: WebCodecs + `mp4-muxer` offline canvas capture pipeline.
 
 ---
 
@@ -105,11 +107,11 @@ As Principal Software Engineer, the Phase 3 milestone was implemented and verifi
 # 1. Full test suite execution
 cd "c:\Users\Hrushikesh Bunni\Downloads\H\PROJECTS\WAYVORA\app"
 npm test
-# Result: 10 test files, 117 tests passed, duration: 591ms, exit code: 0
+# Result: 11 test files, 129 tests passed, duration: 702ms, exit code: 0
 
 # 2. Production build verification
 npm run build
-# Result: tsc -b && vite build completed in 427ms, exit code: 0
+# Result: tsc -b && vite build completed in 539ms, exit code: 0
 
 # 3. Development server execution
 npm run dev
@@ -117,22 +119,24 @@ npm run dev
 
 # 4. End-to-end browser smoke test (via browser subagent)
 # Verified:
-# - Metadata tab inspection: Geographic Diagnostics panel shows health status, distance 211.57 km, points, elevation coverage 33%, and boundary gaps
-# - Segments tab: Segment #1 expanded, Road Routing Engine box displayed
-# - OSRM live routing query returned 3,678 road points across 118.3 km
-# - Route confirmation card: applied to Segment #1, updated point count, triggered unsaved indicator
-# - Undo (↺) reverted segment geometry to original state cleanly
-# - Timeline Play (▶) smoke test confirmed smooth playback
-# - Recording: phase3_routing_diagnostics_smoke_1792044968999.webp
+# - Map Right Action Bar: clicked 🏔 button to toggle 3D Terrain OFF (switched to 2D flat mode with toast)
+# - Clicked 🏔 button again to re-enable 3D Terrain (Terrarium raster-dem loaded)
+# - Right Inspector: verified "3D Terrain & Relief" panel, ON/OFF toggle, and exaggeration slider (1.2x)
+# - Preset selection: loaded Mt. Whitney Alpine Ascent (4421m elevation climb)
+# - Route overlay: confirmed route glow and trail polyline draped over 3D mountain relief
+# - Camera clearance: confirmed clearance evaluator operates without clipping through ridges
+# - Recording: phase4_terrain_elevation_smoke_1792046284962.webp
 ```
 
 ---
 
-## 4. Next Highest-Priority Work (Phase 4)
+## 4. Next Highest-Priority Work (Phase 5)
 
-1. **Camera Director & Scene Keyframe Sequencer**:
-   - Camera modes: overview, flyover, chase, ground, orbit with smooth keyframe transitions.
-2. **Interactive Route Point Dragging on Map**:
-   - Direct pointer dragging of vertex circle markers on MapLibre WebGL canvas.
-3. **Media & Stop Annotations**:
-   - Photo attachments and waypoint callouts displayed dynamically during playback.
+1. **Cinematic Camera Engine & Scene Director**:
+   - Dynamic camera modes: Overview, Flyover, Chase, Ground, Orbit.
+   - Smooth camera transitions with spherical spline interpolation.
+   - Scene keyframe sequencer integrated with timeline boundaries.
+2. **Interactive Map Vertex Dragging**:
+   - Direct pointer dragging of route vertices on the MapLibre canvas.
+3. **Media & Stop Waypoint Annotations**:
+   - Geotagged photo attachments and summit milestone callouts during stop dwells.

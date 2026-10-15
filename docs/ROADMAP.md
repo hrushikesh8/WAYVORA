@@ -104,60 +104,68 @@
 - [x] End-to-end browser smoke test verified: OSRM live routing query returned 3,678 road points across 118.3 km, applied to Segment #1, verified undo, and captured WebP recording.
 
 
-## Phase 2: Camera & Scene System
+## Phase 4: Real 3D Terrain and Elevation Pipeline
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Research & Comparative Architecture Evaluation (`docs/research/TERRAIN_OPTIONS.md`):
+  - In-depth evaluation of MapLibre Native 3D Raster-DEM, Custom Three.js/WebGL DEM mesh, and Point Elevation Web APIs (Open-Elevation, Open-Meteo).
+  - Assessed DEM resolution (SRTM 30m vs Copernicus 30m vs ArcticDEM), coverage, licensing (Public Domain / ODbL), caching, GPU performance, and operational costs.
+  - Recorded ADR-009 for Native MapLibre 3D Raster-DEM with AWS Open Data Terrarium tiles.
+- [x] Provider-Independent Elevation Sampling Contract (`app/src/domain/elevation/`):
+  - Pure domain types: `ElevationCoord`, `ElevationSample`, `ElevationProvider`, `ElevationProviderMetadata`, `ElevationResolution`, `ElevationUnits`.
+  - Terrarium RGB decoder: pure mathematical decoding $(R \cdot 256 + G + B/256) - 32768$ with sub-meter vertical precision.
+  - Mapbox RGB decoder: $(R \cdot 256^2 + G \cdot 256 + B) \cdot 0.1 - 10000$.
+  - WGS84 to Web Mercator tile index calculation (`lngLatToTile`).
+  - `MockElevationProvider`: In-memory LRU caching, missing tile/coordinate simulation, batch queries, and deterministic offline fixtures.
+  - Honest data policy: never invents missing elevation measurements; cleanly separates recorded GPS elevation from externally sampled terrain elevation and interpolated values.
+- [x] Real 3D Terrain Rendering in MapLibre Studio (`app/src/App.tsx`):
+  - AWS Open Data Terrarium raster-DEM source configured (`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`).
+  - Dynamic `map.setTerrain({ source: 'terrain-source', exaggeration: terrainExaggeration })` integration.
+  - Exaggeration control (0.5x to 2.5x) with live slider in Right Inspector.
+  - Graceful fallback: one-click toggle to 2D flat mode or automatic fallback when offline or tiles fail to load.
+  - Automatic GeoJSON vector draping: route glow, route line, segment vertices, and markers seamlessly drape over the 3D mountain mesh.
+  - Studio UI controls: Quick Map Action 🏔 button with active state & toast, Right Inspector "3D Terrain & Relief" control box with attribution.
+- [x] Deterministic Camera Ground Clearance Engine (`app/src/domain/camera.ts`):
+  - Mercator ground resolution scaling (`getMetersPerPixel`).
+  - Pure mathematical clearance evaluation: `evaluateCameraClearance(...)` calculates camera eye altitude, evaluates ground elevation at camera coordinates, detects mountain collision/subsurface clipping, and clamps pitch to maintain visual line of sight.
+  - Integrated into studio frame evaluation loop.
+- [x] Automated Testing Suite: 129 tests passing across 11 test suites (including 12 new terrain/elevation tests in `app/src/__tests__/terrain.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~539ms).
+- [x] End-to-end browser smoke test verified: tested 3D terrain toggling, exaggeration adjustments, 2D fallback, Mt. Whitney Alpine Ascent (4421m summit), and camera clearance with WebP recording (`phase4_terrain_elevation_smoke_1792046284962.webp`).
+
+
+## Phase 5: Cinematic Camera Engine & Scene Director
 **Status**: PROPOSED
 
-- Camera modes: overview, flyover, chase, ground, orbit
+- Camera modes: Overview, Flyover, Chase, Ground, Orbit
 - Scene editor with camera mode per scene
 - Timeline scrubber with scene boundaries
-- Camera keyframe interpolation
-- AutoCam: follow route with smoothing
-- Terrain-aware camera (clear mountains)
+- Camera keyframe spline interpolation
+- AutoCam: follow route with heading and pitch smoothing
+- Horizon and sky atmosphere rendering in 3D mode
 
-## Phase 3: Trail Support
+## Phase 6: Media, Annotations & Audio
 **Status**: PROPOSED
 
-- GPX track import for hiking/trail segments
-- Elevation-aware rendering (color by gradient)
-- Trail-specific camera modes (first-person, drone chase)
-- Waypoint markers along trails
-- Pace/speed visualization
-- Trail comparison (side-by-side replays)
+- Photo attachment to stops with geo-anchoring
+- Photo modal / callout display during stop dwell
+- Text captions, milestones, and summit annotations
+- Ambient audio / narration track synchronization
+- Dynamic video overlay graphics (title card, speed, elevation graph, odometer)
 
-## Phase 4: Media & Annotations
+## Phase 7: Deterministic Video Export (WebCodecs)
 **Status**: PROPOSED
 
-- Photo attachment to stops
-- Photo gallery display during playback
-- Text captions and annotations
-- Music / narration audio tracks
-- Overlay graphics (title, odometer, progress bar)
-
-## Phase 5: Export & Sharing
-**Status**: PROPOSED
-
-- WebCodecs deterministic MP4 export
-- Multiple aspect ratios (16:9, 9:16, 1:1)
-- Resolution up to 4K
-- Codec selection (H.264, H.265, AV1)
-- Progress bar during export
-- Export preview
-
-## Phase 6: Advanced Features
-**Status**: PROPOSED
-
-- 3D terrain with satellite imagery
-- Globe projection for intercontinental journeys
-- Sea lane routing
-- 3D vehicle models
-- Custom map styles
-- Cloud project storage (optional)
-- Collaborative editing
+- WebCodecs + `mp4-muxer` frame-by-frame offline rendering pipeline
+- Canvas frame capture with zero frame drops
+- Multiple aspect ratios (16:9 landscape, 9:16 vertical reels/shorts, 1:1 square)
+- Resolution selection (720p, 1080p, 4K)
+- Export progress bar and offline video preview
 
 ## Non-Goals (Explicit)
 
 - Native mobile app (browser-first)
-- Real-time GPS tracking
-- Navigation / turn-by-turn directions
-- Social network features
-- AI-generated content
+- Real-time GPS navigation / turn-by-turn routing
+- Social network features / cloud lock-in
+- Silently fabricating missing elevation or route coordinates
+
