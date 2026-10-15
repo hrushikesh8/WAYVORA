@@ -398,10 +398,31 @@ button {
 .map-hud-top {
   position: absolute;
   top: 14px;
-  left: 14px;
+  left: 370px;
   z-index: 10;
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  transition: left 0.2s ease, top 0.2s ease;
+}
+
+@media (max-width: 1200px) {
+  .map-hud-top {
+    top: 60px;
+    left: 14px;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
 }
 
 .hud-chip {

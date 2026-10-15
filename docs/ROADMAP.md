@@ -348,9 +348,39 @@
   - Service Worker (`app/public/sw.js`) provides offline caching for application shell, styles, and vector assets.
   - Strict exclusion of the 1.78 GB `RESOURCES/` research repository collection from all production bundles.
 - [x] Comprehensive Acceptance Test Suite:
-  - Added `app/src/__tests__/reliability-and-performance.test.ts` (13 tests) verifying spatial caching, schema hardening, atomic storage recovery, and full end-to-end journey lifecycle (GPX import → template → audio → serialize → seek → reload).
-  - Total test suite: **207 passed / 207 tests** across 17 test suites in 1.14s.
-  - Strict TypeScript build passing (`tsc -b && vite build` in 541ms).
+## Phase 4: Place Search & Geocoding Autocomplete
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Provider Evaluation & Architecture Decision (ADR-016):
+  - Evaluated Photon (Komoot/OSM), Nominatim, OpenCage, Mapbox, and Pelias.
+  - Selected Photon as default active provider: specifically engineered for fast search-as-you-type autocomplete, zero API keys required in client code, ODbL attribution, and self-hostable.
+  - MockGeocodingAdapter implemented for offline development and deterministic unit testing.
+- [x] Provider-Agnostic Geocoding Interface (`app/src/domain/geocoding/`):
+  - `GeocodingAdapter`, `GeocodeQuery`, `GeocodeResponse`, `GeocodeResult`, and error types.
+  - Coordinate validation (`isValidCoordinate`) rejecting out-of-bounds lat/lng, NaNs, and infinities.
+  - Clean display name formatting (`formatPhotonDisplayName`) deduplicating location hierarchies.
+- [x] Studio Place Search UI (`app/src/components/PlaceSearch.tsx`):
+  - 280ms debounced input with loading indicator.
+  - Request cancellation using `AbortController` preventing stale-response race conditions.
+  - Accessible keyboard navigation (ArrowUp, ArrowDown, Enter, Escape).
+  - Explicit states for loading, no results found, network errors, and 429 rate limits.
+  - Clear button and click-outside dismissal.
+  - Selected place inspection card with place name, coordinates, address hierarchy, and "+ Add Waypoint to Journey" button.
+- [x] Map Canvas & Lifecycle Integration (`app/src/App.tsx`):
+  - Smooth camera `flyTo` animation to selected coordinates.
+  - Temporary pulsing cyan location marker.
+  - Persistent marker lifecycle across all 5 map styles (Standard, Outdoors, Satellite, Satellite+Labels, Cinematic) via `style.load` hooks.
+  - Prominent OpenStreetMap and Photon attribution display.
+- [x] Route & Undo/Redo Integration (`app/src/domain/editor.ts`):
+  - Pure functional `appendPlaceToJourney(journey, place, options)`.
+  - Appends to empty journey as start stop or connects from previous end stop with a manual segment.
+  - Seamlessly pushes changes to `EditorHistory`, supporting full undo/redo without mutating existing waypoint IDs, timestamps, or route provenance.
+- [x] Comprehensive Acceptance & Unit Tests:
+  - Added `app/src/__tests__/geocoding.test.ts` (22 tests) verifying coordinate validation, result parsing, provider adapters, abort signals, route waypoint integration, and undo/redo stacks.
+  - Total test suite: **266 passed / 266 tests** across 21 test suites in 1.45s.
+  - Strict TypeScript build passing (`tsc -b && vite build` in 599ms).
+- [x] Browser QA Verification:
+  - Verified in browser with automated recording: successful autocomplete search for "Zurich", keyboard selection, map fly-to, place inspection card, "+ Add Waypoint to Journey" (stop count 11 -> 12), Undo (12 -> 11), Redo (11 -> 12), no-results message for random queries, clear search dismiss, and map style switching across all 5 styles.
 
 ## Non-Goals (Explicit)
 
@@ -359,5 +389,6 @@
 - AI voice cloning / cloud TTS upload
 - Real-time GPS navigation / turn-by-turn routing
 - Silently fabricating missing elevation or route coordinates
+
 
 

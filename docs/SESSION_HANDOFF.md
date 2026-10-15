@@ -1,38 +1,44 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 10 — Performance, Reliability, and Distribution Readiness  
+> Session: Phase 4 — Place Search & Geocoding Autocomplete  
 > Date: 2026-10-15  
-> Status: Phase 10 VERIFIED · 207/207 Unit & Acceptance Tests Passing · Production Build Green · Complete 10-Phase Roadmap Delivered
+> Status: Phase 4 VERIFIED · 266/266 Unit & Acceptance Tests Passing · Production Build Green · Browser QA Complete
 
 ---
 
 ## 1. Executive Summary
 
-As Principal Software Engineer, the Phase 10 milestone has been completed, empirically profiled, and thoroughly verified, concluding the planned 10-phase foundational engineering roadmap for WAYVORA:
+Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigorously tested, and browser-verified:
 
-1. **Preserved Baseline & Code Assets**:
-   - Clean Git baseline maintained from Phase 9 checkpoint `068e6b1`.
-   - All 17 reference repositories in `RESOURCES/` (1.78 GB, 86,104 files) preserved completely untracked and untouched.
-   - All Phase 0 through Phase 9 capabilities (GPX parsing, route editing, undo/redo, stop dwell playback, OSRM road routing, geographic diagnostics, 3D raster-DEM terrain, cinematic camera keyframes, story annotations, audio mixing, MP4 export, social-format framing, and travel templates) continue passing 100% of tests with zero regressions.
+1. **Provider Due Diligence & Architecture Decision (ADR-016)**:
+   - Evaluated Photon (Komoot/OSM), Nominatim, OpenCage, Mapbox, and Pelias across search quality, autocomplete suitability, licensing, video-export eligibility, rate limits, and key exposure.
+   - Selected **Photon** (`https://photon.komoot.io/api`) as default active provider: specifically built on OpenStreetMap + Elasticsearch for search-as-you-type autocomplete, zero API keys required in client code, ODbL attribution, and self-hostable.
+   - Implemented `MockGeocodingAdapter` with in-memory dataset for offline testing.
 
-2. **Empirical Performance Profiling & Spatial Distance Caching (`app/src/domain/timeline.ts`)**:
-   - Identified spatial calculation bottleneck: previous frame evaluations repeatedly computed $O(N)$ Haversine distances across all points and allocated arrays on every frame during scrubbing and export.
-   - Implemented `getCachedJourneySpatialData(journey)` caching `allPoints`, `cumulativeDistances`, `totalDistance`, and `segmentLengths` keyed to the immutable `journey.segments` reference.
-   - **Measured Benchmark**:
-     - **Before (Uncached)**: 500 frames across 5,000 points took **178.14 ms** (allocating 500 arrays and computing 2.5 million Haversines).
-     - **After (Cached)**: 500 frames across 5,000 points took **0.46 ms**.
-     - **Performance Speedup**: **391.4x faster**, completely eliminating CPU stalls and garbage collection pauses during 60 FPS playback and 1080p/4K video export.
+2. **Domain Geocoding Layer (`app/src/domain/geocoding/`)**:
+   - Clean, replaceable `GeocodingAdapter` contract: `search(query: GeocodeQuery): Promise<GeocodeResponse>`.
+   - Defensive coordinate validation (`isValidCoordinate`) rejecting out-of-bounds coordinates ($-90 \le \text{lat} \le 90, -180 \le \text{lng} \le 180$), non-finite numbers, and NaNs.
+   - Hierarchical display name formatting (`formatPhotonDisplayName`) deduplicating administrative levels.
 
-3. **Reliability, Corruption Resilience & Schema Hardening (`journey.ts`, `serialization.ts`)**:
-   - Hardened `validateJourney` and `deserializeProject` against truncated JSON, invalid/negative version numbers, missing journey objects, corrupted latitudes/longitudes, and degenerate segments.
-   - Legacy project auto-migration handles missing audio timelines and converts legacy percentage scenes into deterministic seconds.
-   - Encoder cleanup: guaranteed `VideoEncoder` and `AudioEncoder` closure in `renderWithWebCodecs` `catch` block prevents hardware encoder channel exhaustion on canceled or failed exports.
+3. **Studio Search UI (`app/src/components/PlaceSearch.tsx`)**:
+   - 280ms debounced input with active spinner.
+   - Stale-response protection via `AbortController` preventing race conditions.
+   - Accessible keyboard navigation (ArrowUp, ArrowDown, Enter, Escape).
+   - Distinct UI states for loading, no results, network errors, and 429 rate limits.
+   - Selected place card displaying name, coordinates, address hierarchy, and "+ Add Waypoint to Journey" button.
+   - Explicit OpenStreetMap and Photon attribution display.
 
-4. **Atomic Project Auto-Save & Crash Recovery (`app/src/domain/storage.ts`)**:
-   - Staged atomic two-step persistence to browser storage (`saveProjectToStorage`, `loadProjectFromStorage`).
-   - Automatically recovers project state from temporary staging key if primary storage was interrupted mid-write.
-   - Seamless `MemoryStorage` fallback for non-browser/test environments and non-throwing `QuotaExceededError` handling.
-   - Debounced auto-save hook in `App.tsx` saves changes continuously without frame stutter.
+4. **Map Canvas & Lifecycle Integration (`app/src/App.tsx`)**:
+   - Smooth `flyTo` camera animation to selected coordinates.
+   - Pulsing temporary cyan marker overlay on map.
+   - Marker re-attachment across map style changes (`style.load`).
+   - Verified seamless operation across all 5 map styles: Standard, Outdoors, Satellite, Satellite+Labels, Cinematic.
+
+5. **Route Waypoint & Undo/Redo Integration (`app/src/domain/editor.ts`)**:
+   - Pure functional `appendPlaceToJourney(journey, place, options)`.
+   - Preserves existing waypoint IDs, timestamps, and segment provenance.
+   - Appends as initial stop if journey is empty, or creates a manual connecting segment from the previous terminal point.
+   - Pushes state cleanly to `EditorHistory`, supporting full undo and redo without breaking route order.
 
 5. **Distribution Strategy & PWA Standalone Packaging**:
    - Documented desktop distribution tradeoffs in **ADR-015**: Progressive Web App (PWA) + Local Production Runner selected over Electron (avoids >150 MB binary bloat) and Tauri v2 (ensures reliable native hardware WebCodecs across platforms).
@@ -51,33 +57,98 @@ As Principal Software Engineer, the Phase 10 milestone has been completed, empir
 
 ### A. VERIFIED (Empirically tested and confirmed)
 
-- **High-Performance Spatial Caching (`timeline.ts`)**:
-  - `getCachedJourneySpatialData`, `clearJourneySpatialCache`.
-  - 391.4x speedup verified under repeatable Node.js and browser benchmarks.
-- **Reliability & Schema Hardening (`journey.ts`, `serialization.ts`)**:
-  - Defensive type checks, range validation ($-90 \le \text{lat} \le 90$, $-180 \le \text{lng} \le 180$), and corruption rejection.
-  - Guaranteed encoder disposal on cancellation and error.
-- **Atomic Project Auto-Save & Recovery (`storage.ts`)**:
-  - Two-stage staging write, crash recovery, and memory fallback.
-- **Distribution Packaging & PWA Assets**:
-  - `manifest.webmanifest`, `sw.js` offline shell worker, PWA meta tags in `index.html`.
-- **End-to-End Acceptance Lifecycle**:
-  - GPX import, route editing, 3D terrain, camera keyframes, template application, music synthesis, export, seeking, and serialization round-trip verified.
+- **Photon Geocoding Adapter (`domain/geocoding/photon.ts`)**:
+  - Open-source, search-as-you-type geocoding via `https://photon.komoot.io/api`.
+  - Rate-limit (429) detection, service unavailable, abort handling, and network error handling.
+- **Mock Geocoding Adapter (`domain/geocoding/mock.ts`)**:
+  - Offline testing with simulated delays, query limits, and forced error injection.
+- **Coordinate Validation & Result Parsing (`domain/geocoding/`)**:
+  - `isValidCoordinate`: rejects invalid lat/lng bounds, NaNs, and infinities.
+  - `formatPhotonDisplayName`: formats and deduplicates hierarchical addresses.
+- **Studio Search UI (`components/PlaceSearch.tsx`)**:
+  - 280ms debouncing, spinner, keyboard navigation (ArrowUp/Down/Enter/Escape).
+  - Selected place card with coordinate display and one-click waypoint integration.
+  - OpenStreetMap & Photon attribution.
+- **Map Interaction & Lifecycle (`App.tsx`)**:
+  - Camera `flyTo` animation, pulsing temporary cyan marker.
+  - Preserved across all 5 map styles (Standard, Outdoors, Satellite, Satellite+Labels, Cinematic).
+- **Route Waypoint Integration (`domain/editor.ts`)**:
+  - `appendPlaceToJourney`: appends to start or connects from last point with manual segment.
+  - Fully integrated into immutable undo/redo history (`EditorHistory`).
+- **Browser QA Verification**:
+  - Search autocomplete, keyboard selection, fly-to, place inspection card, "+ Add Waypoint to Journey", Undo, Redo, no-results display, clear button, and style toggling verified live in browser.
 - **Automated Test Suite**:
-  - 207 unit and acceptance tests passing across 17 test files.
+  - 266 unit and acceptance tests passing across 21 test files in 1.45s.
+- **Production Build**:
+  - `tsc -b && vite build` passing with zero errors.
 
 ### B. IMPLEMENTED BUT NOT VERIFIED
 
-- *None.* All Phase 10 capabilities have empirical test coverage.
+- *None.* All Phase 4 capabilities have unit test coverage and automated browser verification.
 
 ### C. BLOCKED
 
 - *None.*
 
-### D. NOT YET IMPLEMENTED (Future Enhancements beyond Foundation Scope)
+### D. NOT YET IMPLEMENTED / PRODUCTION CONSIDERATIONS
 
-- Cloud rendering farms and multi-machine distributed export (explicit non-goal for local-first studio).
-- Full Digital Audio Workstation (DAW) VST plugin hosting (explicit non-goal).
+- Dedicated self-hosted Photon Docker instance for enterprise scale (>1,000,000 requests/day).
+- Reverse geocoding (click-on-map to address lookup) — deferred to future phase.
+
+---
+
+## 3. Empirical Test & Build Outputs
+
+### Test Suite Execution (`npm test` in `app/`)
+
+```
+ RUN  v5.0.4 C:/Users/Hrushikesh Bunni/Downloads/H/PROJECTS/WAYVORA/app
+
+ ✓ src/__tests__/routing.test.ts (11 tests) 59ms
+ ✓ src/__tests__/gpx.test.ts (12 tests) 38ms
+ ✓ src/__tests__/audio.test.ts (10 tests) 285ms
+ ✓ src/__tests__/journey.test.ts (8 tests) 21ms
+ ✓ src/__tests__/road-to-trail-acceptance.test.ts (14 tests) 25ms
+ ✓ src/__tests__/editor.test.ts (13 tests) 25ms
+ ✓ src/__tests__/story.test.ts (10 tests) 29ms
+ ✓ src/__tests__/geocoding.test.ts (22 tests) 34ms
+ ✓ src/__tests__/transport-3d.test.ts (16 tests) 68ms
+ ✓ src/__tests__/diagnostics.test.ts (12 tests) 24ms
+ ✓ src/__tests__/render.test.ts (15 tests) 53ms
+ ✓ src/__tests__/transport.test.ts (12 tests) 48ms
+ ✓ src/__tests__/styles.test.ts (8 tests) 36ms
+ ✓ src/__tests__/camera.test.ts (19 tests) 18ms
+ ✓ src/__tests__/polish-and-templates.test.ts (12 tests) 20ms
+ ✓ src/__tests__/stop-playback.test.ts (6 tests) 17ms
+ ✓ src/__tests__/geo.test.ts (30 tests) 15ms
+ ✓ src/__tests__/terrain.test.ts (12 tests) 11ms
+ ✓ src/__tests__/serialization.test.ts (4 tests) 7ms
+ ✓ src/__tests__/timeline.test.ts (7 tests) 9ms
+ ✓ src/__tests__/reliability-and-performance.test.ts (13 tests) 321ms
+
+ Test Files  21 passed (21)
+      Tests  266 passed (266)
+   Duration  1.45s
+```
+
+### Production Build (`npm run build` in `app/`)
+
+```
+> app@0.0.0 build
+> tsc -b && vite build
+
+vite v8.3.4 building client environment for production...
+transforming...
+✓ 69 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                  1.25 kB │ gzip:   0.62 kB
+dist/assets/maplibre-gl-worker-DxGNRm0a.mjs    508.31 kB
+dist/assets/index-C6WCG6Ix.css                 109.59 kB │ gzip:  15.97 kB
+dist/assets/index-JyfYgvTp.js                2,115.23 kB │ gzip: 572.96 kB
+
+✓ built in 599ms
+```
 
 ---
 

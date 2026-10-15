@@ -12,6 +12,7 @@ import type {
   JourneySegment,
   RoutePoint,
   Stop,
+  StopType,
   TransportMode,
   ProvenanceMetadata,
 } from './types';
@@ -925,6 +926,99 @@ export function applyTemplateToJourney(
 ): Journey {
   return applyJourneyTemplate(journey, templateId, options);
 }
+
+/**
+ * Appends a geocoded place as a new destination or waypoint in the journey.
+ * Preserves existing route order, segment provenance, and IDs.
+ */
+export function appendPlaceToJourney(
+  journey: Journey,
+  place: { name: string; lng: number; lat: number; ele?: number },
+  options: {
+    transportMode?: TransportMode;
+    stopType?: StopType;
+  } = {}
+): { journey: Journey; newStopId: string; newSegmentId?: string } {
+  validateCoordinates(place.lat, place.lng);
+
+  const newStopId = generateId();
+  const point: RoutePoint = {
+    lng: place.lng,
+    lat: place.lat,
+    ...(place.ele != null ? { ele: place.ele } : {}),
+  };
+
+  // Case A: Journey has no segments yet
+  if (journey.segments.length === 0) {
+    const startStop: Stop = {
+      id: newStopId,
+      name: place.name || 'Start Location',
+      position: point,
+      type: 'start',
+      segmentIndex: 0,
+    };
+
+    return {
+      journey: {
+        ...journey,
+        stops: [startStop],
+        updatedAt: new Date().toISOString(),
+      },
+      newStopId,
+    };
+  }
+
+  // Case B: Connect from previous terminal point to the new destination
+  const lastSegIndex = journey.segments.length - 1;
+  const lastSegment = journey.segments[lastSegIndex];
+  const lastPoint = lastSegment.points[lastSegment.points.length - 1];
+
+  const mode = options.transportMode ?? lastSegment.transportMode ?? 'car';
+  const type = segmentTypeForMode(mode);
+  const newSegmentId = generateId();
+
+  const newSegment: JourneySegment = {
+    id: newSegmentId,
+    type,
+    transportMode: mode,
+    points: [{ ...lastPoint }, { ...point }],
+    sourceFormat: 'manual',
+    metadata: {
+      isModified: true,
+      lastModifiedAt: new Date().toISOString(),
+    },
+  };
+
+  // Update previous terminal stop from 'end' to 'waypoint'
+  const updatedStops = journey.stops.map((s) => {
+    if (s.type === 'end') {
+      return { ...s, type: 'waypoint' as StopType };
+    }
+    return s;
+  });
+
+  const newStop: Stop = {
+    id: newStopId,
+    name: place.name || `Waypoint ${updatedStops.length + 1}`,
+    position: point,
+    type: options.stopType ?? 'end',
+    segmentIndex: journey.segments.length,
+  };
+
+  const updatedJourney: Journey = {
+    ...journey,
+    segments: [...journey.segments, newSegment],
+    stops: [...updatedStops, newStop],
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    journey: updatedJourney,
+    newStopId,
+    newSegmentId,
+  };
+}
+
 
 
 

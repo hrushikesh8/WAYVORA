@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Map, Marker, setWorkerUrl } from 'maplibre-gl';
 import maplibreglWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -46,8 +46,11 @@ import {
   deleteAudioClip,
   setAudioTrackVolume,
   setMasterAudioVolume,
+  appendPlaceToJourney,
   type EditorHistory,
 } from './domain/editor';
+import { PlaceSearch } from './components/PlaceSearch';
+import type { GeocodeResult } from './domain/geocoding';
 import {
   type AudioClip,
   synthesizeAudioTone,
@@ -263,6 +266,12 @@ export default function App() {
   const lastTimestampRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Place Search & Waypoint Integration State
+  const [selectedPlace, setSelectedPlace] = useState<GeocodeResult | null>(null);
+  const selectedPlaceRef = useRef<GeocodeResult | null>(null);
+  selectedPlaceRef.current = selectedPlace;
+  const searchMarkerRef = useRef<Marker | null>(null);
+
   // Derived metrics
   const allPoints = useMemo(() => getAllPoints(journey), [journey]);
   const journeyTotalDistance = useMemo(() => totalDistance(allPoints), [allPoints]);
@@ -417,10 +426,31 @@ export default function App() {
         transportRenderMode: transportRenderModeRef.current,
       });
 
+      // Re-attach active place search marker across map style switches
+      if (selectedPlaceRef.current) {
+        const p = selectedPlaceRef.current;
+        if (searchMarkerRef.current) searchMarkerRef.current.remove();
+        const pinEl = document.createElement('div');
+        pinEl.className = 'wayvora-search-pin';
+        pinEl.innerHTML = `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+            <div style="position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(0, 242, 254, 0.35); animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 20px; height: 20px; border-radius: 50%; background: #00f2fe; border: 2.5px solid #ffffff; box-shadow: 0 0 16px #00f2fe, 0 4px 8px rgba(0,0,0,0.6);"></div>
+          </div>
+        `;
+        searchMarkerRef.current = new Marker({ element: pinEl, anchor: 'center' })
+          .setLngLat([p.lng, p.lat])
+          .addTo(map);
+      }
+
       fitMapToBounds(map, getAllPoints(journeyRef.current));
     });
 
     return () => {
+      if (searchMarkerRef.current) {
+        searchMarkerRef.current.remove();
+        searchMarkerRef.current = null;
+      }
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -463,6 +493,65 @@ export default function App() {
       { padding: 80, duration: 1200, pitch: mapPitch }
     );
   };
+
+  // ── Place Search & Waypoint Integration Handlers ──
+  const handleSelectPlace = useCallback((place: GeocodeResult) => {
+    setSelectedPlace(place);
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (searchMarkerRef.current) {
+      searchMarkerRef.current.remove();
+      searchMarkerRef.current = null;
+    }
+
+    const pinEl = document.createElement('div');
+    pinEl.className = 'wayvora-search-pin';
+    pinEl.innerHTML = `
+      <div style="position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+        <div style="position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(0, 242, 254, 0.35); animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+        <div style="position: relative; width: 20px; height: 20px; border-radius: 50%; background: #00f2fe; border: 2.5px solid #ffffff; box-shadow: 0 0 16px #00f2fe, 0 4px 8px rgba(0,0,0,0.6);"></div>
+      </div>
+    `;
+
+    searchMarkerRef.current = new Marker({ element: pinEl, anchor: 'center' })
+      .setLngLat([place.lng, place.lat])
+      .addTo(map);
+
+    map.flyTo({
+      center: [place.lng, place.lat],
+      zoom: Math.max(map.getZoom(), 11),
+      speed: 1.2,
+      curve: 1.4,
+      essential: true,
+    });
+  }, []);
+
+  const handleAddPlaceToJourney = useCallback((place: GeocodeResult) => {
+    const next = appendPlaceToJourney(journeyRef.current, {
+      name: place.name,
+      lng: place.lng,
+      lat: place.lat,
+    });
+
+    setEditorHistory((prev) => pushEditorHistory(prev, next.journey));
+    setJourney(next.journey);
+
+    const map = mapInstanceRef.current;
+    if (map && map.isStyleLoaded()) {
+      syncRouteSourceData(map, getAllPoints(next.journey));
+      const activeSeg = next.journey.segments.find((s) => s.id === selectedSegmentIdRef.current) ?? null;
+      syncSegmentPointsData(map, activeSeg, selectedPointIndexRef.current);
+    }
+  }, []);
+
+  const handleClearSearchSelection = useCallback(() => {
+    setSelectedPlace(null);
+    if (searchMarkerRef.current) {
+      searchMarkerRef.current.remove();
+      searchMarkerRef.current = null;
+    }
+  }, []);
 
   // Sync editable segment vertices on map
   useEffect(() => {
@@ -2595,6 +2684,24 @@ export default function App() {
         {/* Center: Interactive Map & Overlays */}
         <div className="studio-center">
           <div ref={mapContainerRef} className="map-container" />
+
+          {/* Floating Place Search & Autocomplete */}
+          <div className="place-search-overlay" style={{ position: 'absolute', top: 14, left: 14, zIndex: 30 }}>
+            <PlaceSearch
+              onSelectPlace={handleSelectPlace}
+              onAddPlaceToJourney={handleAddPlaceToJourney}
+              selectedPlace={selectedPlace}
+              onClearSelection={handleClearSearchSelection}
+              proximityBias={
+                mapInstanceRef.current
+                  ? {
+                      lat: mapInstanceRef.current.getCenter().lat,
+                      lng: mapInstanceRef.current.getCenter().lng,
+                    }
+                  : undefined
+              }
+            />
+          </div>
 
           {/* Cinematic Story Overlays (Canvas Layer) */}
           {currentFrame.storyState?.title && (

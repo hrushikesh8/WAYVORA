@@ -15,4 +15,5 @@ export * from './render';
 export * from './audio';
 export * from './templates';
 export * from './storage';
+export * from './geocoding';
 

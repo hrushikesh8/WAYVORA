@@ -376,9 +376,39 @@ As WAYVORA completes its planned 10-phase foundational roadmap, three critical o
    - Catches corrupted structures, negative/NaN durations, and truncated JSON with actionable error messages instead of unhandled runtime type errors.
 
 **Rationale**:
-- Maximizes frame evaluation throughput and export rendering speed without sacrificing geographic accuracy or determinism.
-- Ensures zero data loss for creators working on intricate, multi-day expedition films.
-- Provides a zero-friction, cross-platform distribution model that leverages modern web standards.
+---
+
+## ADR-016: Place Search, Geocoding Autocomplete, and Journey Waypoint Integration
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**:
+Creators need a fast, intuitive way to search real-world locations (cities, mountain peaks, landmarks, waypoints) directly on the 3D map canvas and optionally append them to their journey route.
+1. **Provider Terms & Autocomplete Policies**: Standard OpenStreetMap Nominatim strictly forbids search-as-you-type autocomplete on its public endpoint. Commercial providers like Google Places or Mapbox Geocoding enforce aggressive pay-per-call tiers, restrict data caching, and forbid embedding geocoded data in rendered video exports without expensive commercial enterprise licenses.
+2. **Client Security & Zero Key Leakage**: Direct client-side calls to commercial APIs risk leaking private tokens or incurring unexpected usage costs.
+3. **Route & Provenance Integrity**: Adding a searched place must cleanly integrate with immutable undo/redo history, validate geographic coordinates ($-90 \le \text{lat} \le 90, -180 \le \text{lng} \le 180$), preserve existing segment geometries and provenance, and never fabricate elevation, timestamps, or GPS provenance.
+
+**Decision**:
+1. **Provider Architecture: Replaceable `GeocodingAdapter` Interface (`app/src/domain/geocoding/`)**:
+   - Establish `GeocodingAdapter` contract: `search(query: GeocodeQuery): Promise<GeocodeResponse>`.
+   - Implement `PhotonGeocodingAdapter` as default active provider querying Photon (`https://photon.komoot.io/api`), an open-source geocoder built by Komoot on OpenStreetMap data and Elasticsearch. Specifically designed for fast search-as-you-type autocomplete, requires zero API keys in client code, and permits ODbL-compliant caching and display.
+   - Implement `MockGeocodingAdapter` with an in-memory database of European and international landmarks for deterministic, zero-network unit testing and offline development.
+2. **Search UI with Debounce & Stale Request Protection (`app/src/components/PlaceSearch.tsx`)**:
+   - 280ms debounce on keystrokes.
+   - Request cancellation via `AbortController` preventing stale out-of-order responses from overwriting current search state.
+   - Full keyboard navigation (ArrowUp, ArrowDown, Enter, Escape).
+   - Defensive error handling with distinct UI states for loading, no results, network errors, and rate limits (429).
+3. **Canvas Map Inspection & Lifecycle Integration (`app/src/App.tsx`)**:
+   - Smooth `flyTo` camera animation to selected location.
+   - Temporary cyan pulsing marker rendered via MapLibre marker overlay.
+   - Full lifecycle persistence across all 5 map styles (Standard, Outdoors, Satellite, Satellite+Labels, Cinematic) via `style.load` hooks.
+   - Transparent OSM and Photon attribution display.
+4. **Immutable Route Editing & Undo/Redo Integration (`app/src/domain/editor.ts`)**:
+   - Implemented `appendPlaceToJourney(journey, place, options)`.
+   - Appends as initial stop if journey is empty; connects from previous terminal point with a manual segment if segments exist.
+   - Pushes state cleanly to `EditorHistory`, supporting full undo and redo without breaking route order or modifying existing waypoints.
+
 
 
 
