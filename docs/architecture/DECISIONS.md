@@ -302,7 +302,54 @@ WAYVORA's video export pipeline (Phase 7) produced mute H.264 MP4 videos. Travel
 **Rationale**:
 - Pure Float32Array PCM mixing is 100% deterministic, testable in node/vitest without browser mocks, and immune to audio driver latency jitter.
 - WebCodecs `AudioEncoder` encodes AAC in hardware/native browser threads in a fraction of real time.
-- Standard AAC in MP4 containers ensures universal playback compatibility across Apple QuickTime, Windows Media Player, iOS Safari, Android Chrome, and YouTube.
+---
+
+## ADR-014: Social-Format Safe Area Framing, Smart Layout Composition, and Deterministic Journey Templates
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**:
+Social platforms (TikTok, Instagram Reels, YouTube Shorts) impose severe UI overlays (creator profile handles, captions, description tags, like/comment/share action ribbons, and sound disk animations) that occlude up to 18% of the vertical frame bottom, 11% of the top, and 13% of the right edge. Merely scaling down a 16:9 canvas to 9:16 without safe-area awareness causes titles, route statistics, and photo callouts to be completely obscured behind platform controls.
+Furthermore, in 16:9 widescreen, rendering both title cards and media photo callouts simultaneously caused visual collisions and text clipping when both occupied the same center or right half of the frame.
+Lastly, users need ready-made narrative templates that configure pacing, camera keyframes, and ambient scores without falsifying or modifying source GPS points, timestamps, or elevations.
+
+**Decision**:
+1. **Platform Safe Area Model (`app/src/domain/render/canvasCompositor.ts`)**:
+   - Introduce `SafeAreaInsets` (`top`, `bottom`, `left`, `right` in pixels) derived dynamically from aspect ratio and output dimensions via `getSafeAreaInsets(aspectRatio, width, height)`.
+   - 16:9 widescreen applies standard 5% broadcast action-safe margins.
+   - 9:16 vertical applies platform UI margins: 11% top (creator profile & search), 18% bottom (sound disc, description, and caption area), 6% left, and 13% right (interaction ribbon).
+   - 1:1 square applies balanced 6% margins.
+   - 4:5 portrait applies 6% horizontal and 8% vertical margins.
+   - Optional non-destructive dashed visual guides (`drawSafeAreaGuides`) for preview and production editing.
+
+2. **Smart Non-Overlapping Compositor Layout (`app/src/domain/render/canvasCompositor.ts`)**:
+   - In 16:9 widescreen, when both title cards and media photo callouts are active on the same frame, the compositor splits into a coordinated two-column layout: title and subtitle card on the left (48% width within safe insets), and media photo card with polaroid border on the right (42% width).
+   - In 9:16 vertical and 1:1 square, elements stack vertically: title card at top ($y = \text{insets.top} + 36\text{px}$), and media photo card centered lower in the frame ($y = \text{height} \times 0.45$).
+   - Text drop shadows (`ctx.shadowColor = 'rgba(0,0,0,0.85)'`, `ctx.shadowBlur = 8`) and automatic multi-line text wrapping for caption subtitles ensure crystal-clear readability over bright vector tiles and high-contrast snow-capped 3D terrain.
+
+3. **Cinematic Post-Processing Treatments (`app/src/domain/render/canvasCompositor.ts`)**:
+   - Radial vignette (`drawVignette`) applying a subtle dark rim gradient focusing attention toward the map route and terrain center.
+   - Filmic color grade presets (`drawColorGrade`):
+     - `golden-hour`: warm amber tone (`#d97706`) with soft-light blending.
+     - `alpine-cool`: crisp glacial blue tone (`#0284c7`) for high-altitude mountain ascents.
+     - `sunset-glow`: vivid twilight magenta/orange (`#e11d48`).
+     - `noir-contrast`: dramatic desaturated high-contrast documentary styling.
+   - Post-processing runs deterministically per frame inside the 2D canvas compositor, requiring zero WebGL post-processing shaders or external runtime dependencies.
+
+4. **Deterministic Journey Templates (`app/src/domain/templates/`)**:
+   - Define 4 deterministic templates:
+     - `cinematic-road-trip`: 45s sweeping cruise pacing, gentle chase camera, golden-hour grade, and ambient synth score.
+     - `hiking-summit-reveal`: 35s trail pacing, automated high-point summit orbit reveal, alpine-cool grade, and high-altitude ambient score.
+     - `city-exploration`: 25s punchy urban pacing, top-down and 45° inspection camera keyframes, and crisp neutral styling.
+     - `social-reel-highlights`: 15s rapid-cut 3-scene vertical reel (Departure, High Point, Arrival) formatted with 9:16 safe-area framing.
+   - **Provenance & Geographic Integrity**: Templates strictly configure timeline scenes, camera keyframes, color grading, and audio tracks. They **never alter or invent** GPS coordinates, segment geometries, elevations, or timestamps. Original route provenance is 100% preserved. Fully integrated into immutable editor undo/redo history.
+
+**Rationale**:
+- Provides instantaneous professional-grade travel films directly from raw GPX/route data without requiring manual timeline keyframing.
+- Guaranteed safe-area compliance prevents critical narrative elements from being hidden on TikTok/Instagram/Shorts.
+- 100% deterministic mathematical evaluation ensures zero frame drift and consistent export output.
+
 
 
 

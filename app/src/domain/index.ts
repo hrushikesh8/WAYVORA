@@ -13,4 +13,5 @@ export * from './story/media';
 export * from './story/evaluator';
 export * from './render';
 export * from './audio';
+export * from './templates';
 

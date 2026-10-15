@@ -1613,6 +1613,26 @@ input[type="range"]::-webkit-slider-thumb {
   text-align: center;
 }
 
+/* ─── Phase 9: Preset Template & Social Formatting Cards ─── */
+.template-preset-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(14, 20, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.template-preset-card:hover {
+  background: rgba(0, 242, 254, 0.08);
+  border-color: rgba(0, 242, 254, 0.4);
+  transform: translateY(-1px);
+}
+
+
 
 
 

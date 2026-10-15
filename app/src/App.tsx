@@ -79,7 +79,13 @@ import {
   type ExportJobConfig,
   type ExportProgress,
   type ExportResult,
+  type ColorGradePreset,
 } from './domain/render';
+import {
+  JOURNEY_TEMPLATES,
+  applyJourneyTemplate,
+  type JourneyTemplateId,
+} from './domain/templates';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -148,6 +154,9 @@ export default function App() {
   // Video Export State
   const [selectedExportProfileIndex, setSelectedExportProfileIndex] = useState(0);
   const [exportFps, setExportFps] = useState(30);
+  const [exportColorGrade, setExportColorGrade] = useState<ColorGradePreset>('golden-hour');
+  const [exportVignette, setExportVignette] = useState<boolean>(true);
+  const [exportSafeGuides, setExportSafeGuides] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
@@ -959,6 +968,12 @@ export default function App() {
       bitrateMbps: 8,
       codec: 'h264',
       aspectRatio: '16:9',
+      cinematicTreatment: {
+        vignette: exportVignette,
+        colorGrade: exportColorGrade,
+        contrastBoost: 0.15,
+      },
+      drawSafeAreaGuides: exportSafeGuides,
     },
     {
       profileName: 'TikTok / Reels 9:16',
@@ -968,6 +983,12 @@ export default function App() {
       bitrateMbps: 6,
       codec: 'h264',
       aspectRatio: '9:16',
+      cinematicTreatment: {
+        vignette: exportVignette,
+        colorGrade: exportColorGrade,
+        contrastBoost: 0.20,
+      },
+      drawSafeAreaGuides: exportSafeGuides,
     },
     {
       profileName: 'Instagram Square 1:1',
@@ -977,6 +998,12 @@ export default function App() {
       bitrateMbps: 6,
       codec: 'h264',
       aspectRatio: '1:1',
+      cinematicTreatment: {
+        vignette: exportVignette,
+        colorGrade: exportColorGrade,
+        contrastBoost: 0.15,
+      },
+      drawSafeAreaGuides: exportSafeGuides,
     },
     {
       profileName: 'Fast Draft 720p',
@@ -986,8 +1013,34 @@ export default function App() {
       bitrateMbps: 4,
       codec: 'h264',
       aspectRatio: '16:9',
+      cinematicTreatment: {
+        vignette: exportVignette,
+        colorGrade: exportColorGrade,
+        contrastBoost: 0.10,
+      },
+      drawSafeAreaGuides: exportSafeGuides,
     },
-  ], [exportFps]);
+  ], [exportFps, exportVignette, exportColorGrade, exportSafeGuides]);
+
+  const handleApplyTemplate = (templateId: JourneyTemplateId) => {
+    const template = JOURNEY_TEMPLATES.find((t) => t.id === templateId);
+    if (!template) return;
+    const updated = applyJourneyTemplate(journey, templateId);
+    applyJourneyEdit(updated, `Applied "${template.name}" Preset Template`);
+    if (template.recommendedAspectRatio === '9:16') {
+      setSelectedExportProfileIndex(1);
+    } else if (template.recommendedAspectRatio === '1:1') {
+      setSelectedExportProfileIndex(2);
+    } else {
+      setSelectedExportProfileIndex(0);
+    }
+    if (template.cinematicTreatment.colorGrade) {
+      setExportColorGrade(template.cinematicTreatment.colorGrade);
+    }
+    if (template.cinematicTreatment.vignette !== undefined) {
+      setExportVignette(template.cinematicTreatment.vignette);
+    }
+  };
 
   const handleStartExport = async () => {
     const config = exportProfiles[selectedExportProfileIndex];
@@ -1052,22 +1105,32 @@ export default function App() {
   const handleCaptureFramePng = () => {
     const map = mapInstanceRef.current;
     const mapCanvas = map ? map.getCanvas() : null;
+    const currentConfig = exportProfiles[selectedExportProfileIndex] || exportProfiles[0];
     const renderFrame = evaluateRenderFrame(activeJourney, currentTime, {
-      width: 1920,
-      height: 1080,
+      width: currentConfig.width,
+      height: currentConfig.height,
       fps: 30,
+      aspectRatio: currentConfig.aspectRatio,
     });
     const canvas = document.createElement('canvas');
-    canvas.width = 1920;
-    canvas.height = 1080;
+    canvas.width = currentConfig.width;
+    canvas.height = currentConfig.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    compositeRenderFrame(ctx, renderFrame, { mapCanvas });
+    compositeRenderFrame(ctx, renderFrame, {
+      mapCanvas,
+      cinematicTreatment: {
+        vignette: exportVignette,
+        colorGrade: exportColorGrade,
+        contrastBoost: 0.15,
+      },
+      drawSafeAreaGuides: exportSafeGuides,
+    });
     canvas.toBlob((blob) => {
       if (blob) {
         const timeCode = Math.round(currentTime).toString().padStart(3, '0');
-        downloadExportBlob(blob, `wayvora_frame_${timeCode}s.png`);
-        showNotification('Captured 1080p frame PNG!');
+        downloadExportBlob(blob, `wayvora_frame_${timeCode}s_${currentConfig.width}x${currentConfig.height}.png`);
+        showNotification(`Captured ${currentConfig.width}x${currentConfig.height} snapshot PNG!`);
       }
     }, 'image/png');
   };
@@ -2313,6 +2376,76 @@ export default function App() {
                   <span style={{ color: (journey.audio?.tracks.some(t => t.clips.length > 0)) ? '#38bdf8' : 'var(--text-muted)', fontWeight: 600 }}>
                     {(journey.audio?.tracks.some(t => t.clips.length > 0)) ? '🎵 Synchronized AAC Audio' : '🎬 Video-Only (No Audio Clips)'}
                   </span>
+                </div>
+
+                {/* Cinematic Treatment & Color Grade */}
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Cinematic Color Grade:
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px', marginBottom: '6px' }}>
+                    {[
+                      { id: 'none', label: 'Raw' },
+                      { id: 'golden-hour', label: '🌅 Amber' },
+                      { id: 'alpine-cool', label: '❄️ Alpine' },
+                      { id: 'sunset-glow', label: '🌆 Sunset' },
+                      { id: 'noir-contrast', label: '🎬 Noir' },
+                    ].map((g) => (
+                      <button
+                        key={g.id}
+                        className={`btn-ghost ${exportColorGrade === g.id ? 'active' : ''}`}
+                        style={{ fontSize: '10px', padding: '4px 2px', justifyContent: 'center' }}
+                        onClick={() => setExportColorGrade(g.id as ColorGradePreset)}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      className={`btn-ghost ${exportVignette ? 'active' : ''}`}
+                      style={{ flex: 1, fontSize: '10px', padding: '4px', justifyContent: 'center' }}
+                      onClick={() => setExportVignette(!exportVignette)}
+                    >
+                      {exportVignette ? '✓ Vignette' : 'Vignette'}
+                    </button>
+                    <button
+                      className={`btn-ghost ${exportSafeGuides ? 'active' : ''}`}
+                      style={{ flex: 1, fontSize: '10px', padding: '4px', justifyContent: 'center' }}
+                      onClick={() => setExportSafeGuides(!exportSafeGuides)}
+                      title="Draw yellow dashed safe area framing guidelines for social formats"
+                    >
+                      {exportSafeGuides ? '✓ Safe-Area' : 'Safe-Area'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Apply Cinematic Preset Templates */}
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    Cinematic Preset Templates:
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                    {JOURNEY_TEMPLATES.map((tmpl) => (
+                      <div
+                        key={tmpl.id}
+                        className="template-preset-card"
+                        onClick={() => handleApplyTemplate(tmpl.id)}
+                        title={tmpl.description}
+                      >
+                        <span style={{ fontSize: '15px' }}>{tmpl.icon}</span>
+                        <div style={{ overflow: 'hidden' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: '#f1f5f9', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                            {tmpl.name}
+                          </div>
+                          <div style={{ fontSize: '9px', color: 'var(--accent-cyan)' }}>
+                            {tmpl.recommendedAspectRatio} · {tmpl.defaultDurationSeconds}s
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Action Buttons */}

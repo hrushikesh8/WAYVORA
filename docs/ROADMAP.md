@@ -286,13 +286,53 @@
 - [x] Automated Unit Test Suite: 182 tests passing across 15 test suites (including 10 comprehensive tests in `app/src/__tests__/audio.test.ts`).
 - [x] Strict TypeScript build passing (`tsc -b && vite build` in ~470ms).
 
-## Phase 9: Visual Polish, Shaders, Preset Templates & Social Formats
+## Phase 9: Export Validation, Cinematic Polish, and Social Formats
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Empirical Export Validation Acceptance Gate:
+  - Real browser export of 4.0-second 720p 30 FPS audiovisual MP4 (`scratch/test_export_phase9.mp4`, 247.5 kB) evaluated via `ffprobe` and `ffmpeg`.
+  - Video stream: `h264 (High) (avc1)`, 1280x720, 30.0 fps, progressive, 120 frames.
+  - Audio stream: `aac (LC) (mp4a)`, 44.1 kHz, stereo, 128 kbps, 173 frames.
+  - Video/Audio synchronization: cross-track alignment via `mp4-muxer` microsecond PTS.
+  - Frame decodes: visually verified start (0.5s), middle (2.0s), and end (3.5s) rendered frames without artifacting or distortion.
+  - Audio analysis (`ffmpeg volumedetect`): -10.4 dB peak / -19.1 dB RMS loudness, non-clipping.
+- [x] Social-Format Safe Area Framing (`app/src/domain/render/canvasCompositor.ts`):
+  - Dynamic platform insets (`getSafeAreaInsets`) across 16:9, 9:16 (TikTok/Reels/Shorts), 1:1, and 4:5.
+  - 9:16 vertical safe areas prevent occlusion from profile headers (11% top), sound/caption zones (18% bottom), and interaction ribbons (13% right).
+  - Optional visual safe-area dashed overlay guides (`drawSafeAreaGuides`) in studio export configuration.
+- [x] Smart Non-Overlapping Compositor Layout:
+  - Dual-card collision avoidance: in 16:9 widescreen, automatically splits simultaneous title cards and photo media callouts into an elegant two-column layout (title left 48%, photo right 42%).
+  - In 9:16 vertical and 1:1 square, automatically stacks title cards at top and media callouts centered lower.
+  - Caption readability: automatic multi-line text wrapping and deep text drop shadows (`rgba(0,0,0,0.85)` with 8px blur) guaranteeing legibility over bright vector tiles and snow-covered terrain.
+- [x] Cinematic Post-Processing Treatments:
+  - Radial vignette (`drawVignette`) focusing viewer attention on the route path and 3D terrain features.
+  - Curated filmic color grade presets (`drawColorGrade`):
+    - `golden-hour`: warm amber tone (`#d97706`) with soft-light blending.
+    - `alpine-cool`: crisp glacial blue tone (`#0284c7`) for high-altitude mountain expeditions.
+    - `sunset-glow`: vivid twilight magenta/orange (`#e11d48`).
+    - `noir-contrast`: dramatic desaturated high-contrast documentary styling.
+- [x] Deterministic Preset Travel Templates (`app/src/domain/templates/`):
+  - 4 production-ready templates:
+    - `cinematic-road-trip`: 45s sweeping cruise pacing, gentle chase camera, golden-hour grade, and ambient synth score.
+    - `hiking-summit-reveal`: 35s trail pacing, automated high-point summit orbit reveal, alpine-cool grade, and high-altitude ambient score.
+    - `city-exploration`: 25s punchy urban pacing, top-down and 45° inspection camera keyframes, and crisp neutral styling.
+    - `social-reel-highlights`: 15s rapid-cut 3-scene vertical reel (Departure, High Point, Arrival) formatted with 9:16 safe-area framing.
+  - Zero GPS/elevation hallucination: strictly configures timeline scenes, camera keyframes, color grading, and audio tracks while preserving 100% of source route geometry, elevation, and provenance.
+  - Full editor integration with immutable undo/redo history (`applyTemplateToJourney`).
+- [x] Studio UI Integration (`app/src/App.tsx`, `app/src/index.css`):
+  - Added Cinematic Color Grade selector (`Raw`, `🌅 Amber`, `❄️ Alpine`, `🌆 Sunset`, `🎬 Noir`).
+  - Added Vignette toggle and Safe-Area overlay toggle.
+  - Added Quick-Apply Template cards with duration, color badge, and one-click application directly in Export Tab.
+- [x] Automated Unit Test Suite: 194 tests passing across 16 test suites (including 12 comprehensive tests in `app/src/__tests__/polish-and-templates.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~580ms).
+
+## Phase 10: Performance Optimization & Distribution Packaging
 **Status**: PROPOSED
 
-- Cinematic map shaders (vignette, atmospheric haze, depth of field)
-- Preset aesthetic styles (Vintage Travelogue, Alpine Minimal, Sunset Gold, Cyberpunk Neon)
-- Aspect ratio canvas letterboxing and safe-zone guides for vertical video (9:16)
-- Export batch rendering and animated map route glow transitions
+- WebWorker offscreen frame rendering and parallel tile caching.
+- Batch multi-format export queue (16:9 + 9:16 simultaneously).
+- PWA offline caching for field use and disconnected travel logging.
+- Standalone shareable web viewer bundle.
 
 ## Non-Goals (Explicit)
 

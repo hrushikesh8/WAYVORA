@@ -94,6 +94,28 @@ export interface RenderFrame {
   metadata: RenderFrameMetadata;
 }
 
+export type ColorGradePreset = 'none' | 'golden-hour' | 'alpine-cool' | 'sunset-glow' | 'noir-contrast';
+
+export interface CinematicTreatment {
+  /** Subtle radial corner darkening */
+  vignette?: boolean;
+  /** Vignette intensity 0..1 (default 0.35) */
+  vignetteIntensity?: number;
+  /** Cinematic color tone grading */
+  colorGrade?: ColorGradePreset;
+  /** Contrast enhancement 0..0.5 (default 0.0) */
+  contrastBoost?: number;
+  /** Cinematic letterboxing or safe margin framing */
+  letterbox?: boolean;
+}
+
+export interface SafeAreaInsets {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
 export interface RenderEvaluationOptions {
   width?: number;
   height?: number;
@@ -117,6 +139,10 @@ export interface ExportJobConfig {
   includeAudio?: boolean;
   /** Audio bitrate in kbps (default 128) */
   audioBitrateKbps?: number;
+  /** Optional cinematic treatment (vignette, color grade, contrast) */
+  cinematicTreatment?: CinematicTreatment;
+  /** Whether to draw subtle dashed safe area guide overlay (for preview) */
+  drawSafeAreaGuides?: boolean;
   /** Optional time range in seconds (defaults to full journey) */
   timeRange?: {
     startTime: number;

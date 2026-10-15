@@ -363,7 +363,11 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
 
       // Composite complete visual frame
-      compositeRenderFrame(ctx, frame, { mapCanvas });
+      compositeRenderFrame(ctx, frame, {
+        mapCanvas,
+        cinematicTreatment: config.cinematicTreatment,
+        drawSafeAreaGuides: config.drawSafeAreaGuides,
+      });
 
       // Encode video frame
       const presentationUs = Math.round(i * usPerFrame);
@@ -571,7 +575,11 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
       });
 
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
-      compositeRenderFrame(ctx, frame, { mapCanvas });
+      compositeRenderFrame(ctx, frame, {
+        mapCanvas,
+        cinematicTreatment: config.cinematicTreatment,
+        drawSafeAreaGuides: config.drawSafeAreaGuides,
+      });
 
       // Frame interval wait for real-time stream capture
       await new Promise((r) => setTimeout(r, Math.round(1000 / fps)));

@@ -19,6 +19,7 @@ import { segmentTypeForMode, generateId } from './types';
 import { haversineDistance } from './geo';
 import type { RouteResult } from './routing/types';
 import type { StoryScene, MediaAsset } from './story/types';
+import { applyJourneyTemplate, type JourneyTemplateId, type TemplateApplyOptions } from './templates';
 
 export class EditError extends Error {
   constructor(message: string) {
@@ -913,6 +914,19 @@ export function setMasterAudioVolume(journey: Journey, volume: number): Journey 
     updatedAt: new Date().toISOString(),
   };
 }
+
+/**
+ * Applies a cinematic preset template to the journey.
+ */
+export function applyTemplateToJourney(
+  journey: Journey,
+  templateId: JourneyTemplateId,
+  options?: TemplateApplyOptions
+): Journey {
+  return applyJourneyTemplate(journey, templateId, options);
+}
+
+
 
 
 
