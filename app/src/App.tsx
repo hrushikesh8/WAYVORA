@@ -11,6 +11,7 @@ import {
 } from './domain/journey';
 import { evaluateTimeline, getEffectiveDuration } from './domain/timeline';
 import { deserializeProject, downloadProject } from './domain/serialization';
+import { saveProjectToStorage, loadProjectFromStorage } from './domain/storage';
 import { totalDistance, computeBounds } from './domain/geo';
 import type { Journey, TransportMode, CameraMode, CameraKeyframe } from './domain/types';
 import { parseGpx, appendGpxToJourney, type GpxParseResult } from './domain/gpx';
@@ -129,9 +130,11 @@ function formatTime(sec: number): string {
 
 export default function App() {
   const [selectedPreset, setSelectedPreset] = useState('alps');
-  const [journey, setJourney] = useState<Journey>(() =>
-    journeyFromWaypoints('Swiss Alps Epic: Road to Ridge', MIXED_JOURNEY_WAYPOINTS)
-  );
+  const [journey, setJourney] = useState<Journey>(() => {
+    const stored = loadProjectFromStorage();
+    if (stored) return stored;
+    return journeyFromWaypoints('Swiss Alps Epic: Road to Ridge', MIXED_JOURNEY_WAYPOINTS);
+  });
   
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -235,6 +238,14 @@ export default function App() {
     setNotification(msg);
     setTimeout(() => setNotification(null), 3500);
   };
+
+  // Atomic debounced auto-save to browser storage
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveProjectToStorage(journey);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [journey]);
 
   // Switch presets
   const handleSelectPreset = (presetId: string) => {

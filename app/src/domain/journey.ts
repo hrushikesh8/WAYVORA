@@ -192,31 +192,60 @@ export interface ValidationError {
 export function validateJourney(journey: Journey): ValidationError[] {
   const errors: ValidationError[] = [];
 
-  if (!journey.id) errors.push({ field: 'id', message: 'Journey must have an id' });
-  if (!journey.name.trim()) errors.push({ field: 'name', message: 'Journey must have a name' });
+  if (!journey || typeof journey !== 'object') {
+    return [{ field: 'journey', message: 'Journey must be a valid object' }];
+  }
 
-  for (let i = 0; i < journey.segments.length; i++) {
-    const seg = journey.segments[i];
-    if (!seg.id) errors.push({ field: `segments[${i}].id`, message: 'Segment must have an id' });
-    if (seg.points.length < 2) {
-      errors.push({ field: `segments[${i}].points`, message: 'Segment must have at least 2 points' });
-    }
-    for (let j = 0; j < seg.points.length; j++) {
-      const p = seg.points[j];
-      if (Math.abs(p.lat) > 90) {
-        errors.push({ field: `segments[${i}].points[${j}].lat`, message: `Invalid latitude: ${p.lat}` });
+  if (!journey.id || typeof journey.id !== 'string') {
+    errors.push({ field: 'id', message: 'Journey must have an id' });
+  }
+  if (!journey.name || typeof journey.name !== 'string' || !journey.name.trim()) {
+    errors.push({ field: 'name', message: 'Journey must have a name' });
+  }
+
+  if (!Array.isArray(journey.segments)) {
+    errors.push({ field: 'segments', message: 'Journey must have a segments array' });
+  } else {
+    for (let i = 0; i < journey.segments.length; i++) {
+      const seg = journey.segments[i];
+      if (!seg || typeof seg !== 'object') {
+        errors.push({ field: `segments[${i}]`, message: 'Segment must be an object' });
+        continue;
       }
-      if (Math.abs(p.lng) > 180) {
-        errors.push({ field: `segments[${i}].points[${j}].lng`, message: `Invalid longitude: ${p.lng}` });
+      if (!seg.id) errors.push({ field: `segments[${i}].id`, message: 'Segment must have an id' });
+      if (!Array.isArray(seg.points) || seg.points.length < 2) {
+        errors.push({ field: `segments[${i}].points`, message: 'Segment must have at least 2 points' });
+      } else {
+        for (let j = 0; j < seg.points.length; j++) {
+          const p = seg.points[j];
+          if (!p || typeof p !== 'object' || typeof p.lat !== 'number' || typeof p.lng !== 'number') {
+            errors.push({ field: `segments[${i}].points[${j}]`, message: 'Point must have numerical lat and lng' });
+            continue;
+          }
+          if (Math.abs(p.lat) > 90) {
+            errors.push({ field: `segments[${i}].points[${j}].lat`, message: `Invalid latitude: ${p.lat}` });
+          }
+          if (Math.abs(p.lng) > 180) {
+            errors.push({ field: `segments[${i}].points[${j}].lng`, message: `Invalid longitude: ${p.lng}` });
+          }
+        }
       }
     }
   }
 
-  if (journey.timeline.duration <= 0) {
-    errors.push({ field: 'timeline.duration', message: 'Duration must be positive' });
+  if (!Array.isArray(journey.stops)) {
+    errors.push({ field: 'stops', message: 'Journey must have a stops array' });
   }
-  if (journey.timeline.fps <= 0) {
-    errors.push({ field: 'timeline.fps', message: 'FPS must be positive' });
+
+  if (!journey.timeline || typeof journey.timeline !== 'object') {
+    errors.push({ field: 'timeline', message: 'Journey must have a timeline object' });
+  } else {
+    if (typeof journey.timeline.duration !== 'number' || journey.timeline.duration <= 0 || !Number.isFinite(journey.timeline.duration)) {
+      errors.push({ field: 'timeline.duration', message: 'Duration must be positive' });
+    }
+    if (typeof journey.timeline.fps !== 'number' || journey.timeline.fps <= 0 || !Number.isFinite(journey.timeline.fps)) {
+      errors.push({ field: 'timeline.fps', message: 'FPS must be positive' });
+    }
   }
 
   return errors;

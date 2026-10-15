@@ -1,0 +1,19 @@
+{
+  "name": "WAYVORA — Cinematic Journey Creation Studio",
+  "short_name": "WAYVORA",
+  "description": "Cinematic travel journey studio unifying road and trail adventures into high-definition 3D animations.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#060a12",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["travel", "video", "multimedia", "productivity"]
+}

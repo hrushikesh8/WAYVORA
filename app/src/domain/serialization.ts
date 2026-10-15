@@ -37,7 +37,7 @@ export function deserializeProject(json: string): Journey {
   const project = parsed as Record<string, unknown>;
 
   // Version check
-  if (typeof project.version !== 'number') {
+  if (typeof project.version !== 'number' || !Number.isFinite(project.version) || project.version < 1) {
     throw new DeserializationError('Missing or invalid version field');
   }
   if (project.version > CURRENT_PROJECT_VERSION) {
@@ -65,12 +65,42 @@ import { createDefaultAudioTimeline } from './audio/mixer';
 
 /**
  * Migrate a project from an older version to the current version.
- * Currently only v1 exists, so this is a no-op placeholder.
+ * Handles missing fields and guarantees structural stability.
  */
 function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
   if (fromVersion === 1) {
-    const journey = journeyRaw as Journey;
-    if (journey.timeline?.scenes) {
+    if (!journeyRaw || typeof journeyRaw !== 'object') {
+      throw new DeserializationError('Project is missing a valid journey object');
+    }
+    const raw = journeyRaw as Record<string, unknown>;
+    const journey = { ...raw } as unknown as Journey;
+
+    // Ensure segments and stops are arrays
+    if (!Array.isArray(journey.segments)) {
+      journey.segments = [];
+    }
+    if (!Array.isArray(journey.stops)) {
+      journey.stops = [];
+    }
+
+    // Ensure timeline structure exists
+    if (!journey.timeline || typeof journey.timeline !== 'object') {
+      journey.timeline = {
+        duration: 30,
+        fps: 60,
+        scenes: [],
+        currentTime: 0,
+      };
+    } else {
+      if (typeof journey.timeline.duration !== 'number' || journey.timeline.duration <= 0 || !Number.isFinite(journey.timeline.duration)) {
+        journey.timeline.duration = 30;
+      }
+      if (typeof journey.timeline.fps !== 'number' || journey.timeline.fps <= 0 || !Number.isFinite(journey.timeline.fps)) {
+        journey.timeline.fps = 30;
+      }
+    }
+
+    if (journey.timeline.scenes) {
       const dur = journey.timeline.duration || 60;
       journey.timeline.scenes = (journey.timeline.scenes as any[]).map((sc: any) => {
         const startTime =
@@ -91,7 +121,7 @@ function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
       journey.audio = createDefaultAudioTimeline();
     } else {
       journey.audio = {
-        masterVolume: journey.audio.masterVolume ?? 1.0,
+        masterVolume: typeof journey.audio.masterVolume === 'number' ? journey.audio.masterVolume : 1.0,
         sampleRate: journey.audio.sampleRate ?? 44100,
         channelCount: journey.audio.channelCount ?? 2,
         tracks: Array.isArray(journey.audio.tracks) ? journey.audio.tracks : [],

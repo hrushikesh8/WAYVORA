@@ -69,6 +69,60 @@ export interface TimelineSchedule {
   totalDistance: number;
 }
 
+interface JourneySpatialCache {
+  segmentsRef: Journey['segments'];
+  allPoints: RoutePoint[];
+  cumulativeDistances: number[];
+  totalDistance: number;
+  segmentLengths: number[];
+}
+
+let spatialCache: JourneySpatialCache | null = null;
+
+/**
+ * Clears the spatial progress cache.
+ */
+export function clearJourneySpatialCache(): void {
+  spatialCache = null;
+}
+
+/**
+ * Returns precomputed cumulative distances, points, and segment lengths for a journey.
+ * Caches results keyed to the immutable segments array reference for ultra-fast frame evaluation.
+ */
+export function getCachedJourneySpatialData(journey: Journey): {
+  allPoints: RoutePoint[];
+  cumulativeDistances: number[];
+  totalDistance: number;
+  segmentLengths: number[];
+} {
+  if (spatialCache && spatialCache.segmentsRef === journey.segments) {
+    return spatialCache;
+  }
+
+  const allPoints = getAllPoints(journey);
+  const cumulativeDistances = computeCumulativeDistances(allPoints);
+  const totalDistance = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
+
+  const segmentLengths: number[] = [];
+  for (let i = 0; i < journey.segments.length; i++) {
+    const seg = journey.segments[i];
+    const segDist = seg.points.length > 1
+      ? computeCumulativeDistances(seg.points).slice(-1)[0] ?? 0
+      : 0;
+    segmentLengths.push(segDist);
+  }
+
+  spatialCache = {
+    segmentsRef: journey.segments,
+    allPoints,
+    cumulativeDistances,
+    totalDistance,
+    segmentLengths,
+  };
+  return spatialCache;
+}
+
 /**
  * Finds the fractional spatial progress (0-1) along the journey for a given stop.
  */
@@ -105,9 +159,7 @@ export function findStopSpatialProgress(
  * Accurately allocates movement time and stop dwell pauses.
  */
 export function computeTimelineSchedule(journey: Journey): TimelineSchedule {
-  const allPoints = getAllPoints(journey);
-  const cumulativeDistances = computeCumulativeDistances(allPoints);
-  const totalDistance = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
+  const { allPoints, cumulativeDistances, totalDistance } = getCachedJourneySpatialData(journey);
 
   // Filter stops with a configured positive durationAtStop
   const dwellStops = journey.stops
@@ -208,17 +260,20 @@ export function computeTimelineSchedule(journey: Journey): TimelineSchedule {
 /**
  * Find active segment index given spatial progress.
  */
-function findActiveSegmentIndex(journey: Journey, progress: number): number {
+function findActiveSegmentIndex(
+  journey: Journey,
+  progress: number,
+  precomputedLengths?: number[],
+  precomputedTotalDist?: number
+): number {
   if (journey.segments.length <= 1) return 0;
-  const allPoints = getAllPoints(journey);
-  const cumulativeDistances = computeCumulativeDistances(allPoints);
-  const totalDist = cumulativeDistances[cumulativeDistances.length - 1] ?? 0;
+  const lengths = precomputedLengths ?? getCachedJourneySpatialData(journey).segmentLengths;
+  const totalDist = precomputedTotalDist ?? getCachedJourneySpatialData(journey).totalDistance;
   const targetDist = progress * totalDist;
 
   let accumulated = 0;
   for (let i = 0; i < journey.segments.length; i++) {
-    const seg = journey.segments[i];
-    const segDist = computeCumulativeDistances(seg.points).slice(-1)[0] ?? 0;
+    const segDist = lengths[i] ?? 0;
     if (targetDist <= accumulated + segDist || i === journey.segments.length - 1) {
       return i;
     }
@@ -250,8 +305,7 @@ export function evaluateTimeline(
   timeSeconds: number,
   options?: EvaluateTimelineOptions | TimelineSchedule
 ): FrameState {
-  const allPoints = getAllPoints(journey);
-  const cumulativeDistances = computeCumulativeDistances(allPoints);
+  const { allPoints, cumulativeDistances, segmentLengths, totalDistance } = getCachedJourneySpatialData(journey);
 
   // Handle empty journey
   if (allPoints.length === 0) {
@@ -310,7 +364,7 @@ export function evaluateTimeline(
     const t = Math.max(0, Math.min(duration, Number.isFinite(timeSeconds) ? timeSeconds : 0));
     const progress = duration > 0 ? t / duration : 0;
     const { point, bearing } = interpolateRoute(allPoints, cumulativeDistances, progress);
-    const activeSegmentIndex = findActiveSegmentIndex(journey, progress);
+    const activeSegmentIndex = findActiveSegmentIndex(journey, progress, segmentLengths, totalDistance);
     const activeScene = findActiveScene(journey.timeline.scenes, progress);
     const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
       ? evaluateCameraAtTime(journey.timeline.keyframes, t, point, bearing, activeScene?.cameraMode ?? 'chase')
@@ -406,7 +460,7 @@ export function evaluateTimeline(
     bearing = interp.bearing;
   }
 
-  const activeSegmentIndex = findActiveSegmentIndex(journey, spatialProgress);
+  const activeSegmentIndex = findActiveSegmentIndex(journey, spatialProgress, segmentLengths, totalDistance);
   const activeScene = findActiveScene(journey.timeline.scenes, spatialProgress);
   const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
     ? evaluateCameraAtTime(journey.timeline.keyframes, t, position, bearing, activeScene?.cameraMode ?? 'chase')
