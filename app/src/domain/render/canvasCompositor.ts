@@ -7,6 +7,11 @@
 
 import type { RenderFrame, SafeAreaInsets, CinematicTreatment, ColorGradePreset } from './types';
 import type { AspectRatio } from '../types';
+import {
+  drawTransportMarker2D,
+  resolveCanonicalTransportMode,
+  TRANSPORT_MODE_METADATA,
+} from '../transport';
 
 export interface ComposeFrameOptions {
   /** Optional background image or canvas from MapLibre GL */
@@ -21,6 +26,8 @@ export interface ComposeFrameOptions {
   drawSafeAreaGuides?: boolean;
   /** Optional map and terrain attribution watermark for video export compliance */
   attributionText?: string;
+  /** Whether to explicitly render 2D transport overlay on canvas (automatic if mapCanvas is missing) */
+  renderTransportOverlay?: boolean;
 }
 
 /**
@@ -94,6 +101,11 @@ export function compositeRenderFrame(
     }
   } else {
     drawFallbackBackground(ctx, width, height);
+  }
+
+  // 2b. Draw 2D transport marker if mapCanvas is not providing it (fallback/test mode) or explicitly requested
+  if (!options?.mapCanvas || options?.renderTransportOverlay) {
+    drawTransportMarker2D(ctx, frame);
   }
 
   // 3. Draw active visual transition (fade/dissolve)
@@ -463,19 +475,23 @@ function drawTechnicalHud(
   const timecode = `${mins}:${secs} / ${Math.round(frame.totalDurationSeconds)}s`;
   const pct = Math.round(frame.spatialProgress * 100);
 
+  const canonicalMode = resolveCanonicalTransportMode(frame.transportMode);
+  const modeMeta = TRANSPORT_MODE_METADATA[canonicalMode];
+  const modeStr = ` · ${modeMeta.label}`;
   const eleStr = frame.position.ele != null ? ` · ⛰ ${Math.round(frame.position.ele)}m` : '';
 
   const hudX = Math.max(16, insets.left);
   const hudY = Math.max(16, insets.top - 20);
+  const hudW = 280;
 
   ctx.fillStyle = 'rgba(10, 15, 26, 0.75)';
-  ctx.fillRect(hudX, hudY, 240, 28);
+  ctx.fillRect(hudX, hudY, hudW, 28);
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-  ctx.strokeRect?.(hudX, hudY, 240, 28);
+  ctx.strokeRect?.(hudX, hudY, hudW, 28);
 
   ctx.fillStyle = '#38bdf8';
   ctx.textAlign = 'left';
-  ctx.fillText(`⏱ ${timecode} (${pct}%)${eleStr}`, hudX + 10, hudY + 18);
+  ctx.fillText(`⏱ ${timecode} (${pct}%)${modeStr}${eleStr}`, hudX + 10, hudY + 18);
 
   // Top Right: WAYVORA Studio watermark & resolution
   const rightW = 180;

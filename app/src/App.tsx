@@ -101,8 +101,15 @@ import {
   attachJourneyMapLayers,
   syncRouteSourceData,
   syncSegmentPointsData,
+  syncTransportSourceData,
   configureMapTerrain,
 } from './domain/map';
+import {
+  getTransportSvg,
+  resolveCanonicalTransportMode,
+  TRANSPORT_MODE_METADATA,
+  CANONICAL_TRANSPORT_MODES,
+} from './domain/transport';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -265,6 +272,8 @@ export default function App() {
     () => evaluateTimeline(activeJourney, currentTime, { stopDwell: stopDwellEnabled }),
     [activeJourney, currentTime, stopDwellEnabled]
   );
+  const currentFrameRef = useRef(currentFrame);
+  currentFrameRef.current = currentFrame;
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -342,9 +351,12 @@ export default function App() {
     });
 
     // Create custom vehicle/marker element
+    const initialMode = journeyRef.current.segments[0]?.transportMode ?? 'car';
+    const canonical = resolveCanonicalTransportMode(initialMode);
     const el = document.createElement('div');
     el.className = 'wayvora-marker';
-    el.innerHTML = '✦';
+    el.dataset.mode = canonical;
+    el.innerHTML = getTransportSvg(canonical, { size: 38 });
     const marker = new Marker({ element: el })
       .setLngLat([allPoints[0]?.lng ?? 0, allPoints[0]?.lat ?? 0])
       .addTo(map);
@@ -385,6 +397,9 @@ export default function App() {
         supportsHillshade: activeStyle.supportsHillshade,
         selectedSegmentId: selectedSegmentIdRef.current,
         selectedPointIndex: selectedPointIndexRef.current,
+        currentPosition: currentFrameRef.current?.position,
+        currentBearing: currentFrameRef.current?.bearing ?? 0,
+        currentMode: currentFrameRef.current?.activeTransportMode ?? 'car',
       });
 
       fitMapToBounds(map, getAllPoints(journeyRef.current));
@@ -445,16 +460,28 @@ export default function App() {
 
   // Sync Marker & Camera on frame update
   useEffect(() => {
-    if (!markerRef.current || !currentFrame.position) return;
+    if (!currentFrame.position) return;
     const { position, bearing } = currentFrame;
-    markerRef.current.setLngLat([position.lng, position.lat]);
-
-    const markerEl = markerRef.current.getElement();
-    if (markerEl) {
-      markerEl.style.transform = `rotate(${bearing}deg)`;
-    }
+    const activeMode = currentFrame.activeTransportMode || 'car';
+    const canonical = resolveCanonicalTransportMode(activeMode);
 
     const map = mapInstanceRef.current;
+    if (map && map.isStyleLoaded()) {
+      syncTransportSourceData(map, position, bearing, activeMode);
+    }
+
+    if (markerRef.current) {
+      markerRef.current.setLngLat([position.lng, position.lat]);
+      const markerEl = markerRef.current.getElement();
+      if (markerEl) {
+        markerEl.style.transform = `rotate(${bearing}deg)`;
+        if (markerEl.dataset.mode !== canonical) {
+          markerEl.dataset.mode = canonical;
+          markerEl.innerHTML = getTransportSvg(canonical, { size: 38 });
+        }
+      }
+    }
+
     if (!map) return;
     // Calculate 3D camera eye coordinate
     const eyeCalc = calculateCameraEyePosition(position, bearing, mapPitch, mapZoom);
@@ -1034,6 +1061,12 @@ export default function App() {
             pitch: frame.camera.pitch,
             zoom: frame.camera.zoom,
           });
+          syncTransportSourceData(
+            map,
+            frame.position,
+            frame.bearing,
+            frame.transportMode || 'car'
+          );
           await new Promise((r) => requestAnimationFrame(r));
           return map.getCanvas();
         },
@@ -1061,6 +1094,14 @@ export default function App() {
 
   const handleCaptureFramePng = () => {
     const map = mapInstanceRef.current;
+    if (map) {
+      syncTransportSourceData(
+        map,
+        currentFrame.position,
+        currentFrame.bearing,
+        currentFrame.activeTransportMode || 'car'
+      );
+    }
     const mapCanvas = map ? map.getCanvas() : null;
     const currentConfig = exportProfiles[selectedExportProfileIndex] || exportProfiles[0];
     const renderFrame = evaluateRenderFrame(activeJourney, currentTime, {
@@ -1767,8 +1808,10 @@ export default function App() {
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => handleChangeSegmentMode(seg.id, e.target.value as TransportMode)}
                         >
-                          {['car', 'hike', 'bike', 'walk', 'train', 'bus', 'motorcycle', 'plane', 'boat'].map((m) => (
-                            <option key={m} value={m}>{m.toUpperCase()}</option>
+                          {CANONICAL_TRANSPORT_MODES.map((m) => (
+                            <option key={m} value={m}>
+                              {TRANSPORT_MODE_METADATA[m].label.toUpperCase()}
+                            </option>
                           ))}
                         </select>
                         <span>• {seg.points.length} points</span>
@@ -2632,6 +2675,12 @@ export default function App() {
 
           {/* Map Top HUD */}
           <div className="map-hud-top">
+            <div className="hud-chip">
+              <span>Mode:</span>
+              <strong style={{ color: TRANSPORT_MODE_METADATA[resolveCanonicalTransportMode(currentFrame.activeTransportMode)].accentColor }}>
+                {TRANSPORT_MODE_METADATA[resolveCanonicalTransportMode(currentFrame.activeTransportMode)].label}
+              </strong>
+            </div>
             <div className="hud-chip">
               <span>Position:</span>
               <strong>

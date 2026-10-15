@@ -9,8 +9,13 @@
    ─────────────────────────────────────────────────────────────────── */
 
 import type { Map, GeoJSONSource } from 'maplibre-gl';
-import type { Journey, RoutePoint, JourneySegment } from '../types';
+import type { Journey, RoutePoint, JourneySegment, TransportMode } from '../types';
 import { getAllPoints } from '../journey';
+import {
+  registerTransportIcons,
+  attachTransportMapLayers,
+  syncTransportSourceData,
+} from '../transport';
 
 export interface AttachLayersOptions {
   terrainEnabled?: boolean;
@@ -18,6 +23,9 @@ export interface AttachLayersOptions {
   supportsHillshade?: boolean;
   selectedSegmentId?: string | null;
   selectedPointIndex?: number | null;
+  currentPosition?: RoutePoint | null;
+  currentBearing?: number;
+  currentMode?: TransportMode;
 }
 
 export const TERRARIUM_DEM_URL =
@@ -148,7 +156,17 @@ export function attachJourneyMapLayers(
     : null;
   syncSegmentPointsData(map, activeSegment, options.selectedPointIndex ?? null);
 
-  // 6. Configure 3D Terrain
+  // 6. Transport Marker Layers (Pulsing halo disc & rotating SVG silhouette)
+  const initialMode = journey.segments[0]?.transportMode ?? 'car';
+  attachTransportMapLayers(
+    map,
+    options.currentPosition ?? allPoints[0] ?? null,
+    options.currentBearing ?? 0,
+    options.currentMode ?? initialMode
+  );
+  registerTransportIcons(map);
+
+  // 7. Configure 3D Terrain
   if (options.terrainEnabled !== false) {
     configureMapTerrain(
       map,
@@ -160,6 +178,12 @@ export function attachJourneyMapLayers(
     configureMapTerrain(map, false, 1.0);
   }
 }
+
+export {
+  registerTransportIcons,
+  attachTransportMapLayers,
+  syncTransportSourceData,
+};
 
 export interface TerrainOptions {
   supportsHillshade?: boolean;

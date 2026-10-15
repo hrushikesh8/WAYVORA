@@ -111,6 +111,7 @@ export function evaluateRenderFrame(
     position: frameState.position,
     bearing: frameState.bearing,
     segmentIndex: frameState.activeSegmentIndex,
+    transportMode: frameState.activeTransportMode,
     isDwelling: frameState.isDwelling,
     activeStop: frameState.activeStop,
     dwellProgress: frameState.dwellProgress,

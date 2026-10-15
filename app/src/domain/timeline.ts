@@ -5,7 +5,7 @@
    Shared identically between interactive preview and video export.
    ─────────────────────────────────────────────────────────────────── */
 
-import type { Journey, RoutePoint, Scene, CameraParams, Stop } from './types';
+import type { Journey, RoutePoint, Scene, CameraParams, Stop, TransportMode } from './types';
 import { computeCumulativeDistances, interpolateRoute, haversineDistance } from './geo';
 import { getAllPoints } from './journey';
 import { evaluateCameraAtTime, type EvaluatedCameraState } from './camera';
@@ -36,6 +36,8 @@ export interface FrameState {
   dwellProgress: number;
   /** Active segment index */
   activeSegmentIndex: number;
+  /** Active transport mode for this frame (e.g. car, bus, train, hike, motorcycle, bike, boat, plane) */
+  activeTransportMode?: TransportMode;
 }
 
 export interface MotionPhase {
@@ -324,6 +326,7 @@ export function evaluateTimeline(
       activeStop: null,
       dwellProgress: 0,
       activeSegmentIndex: 0,
+      activeTransportMode: journey.segments[0]?.transportMode ?? 'car',
     };
   }
 
@@ -345,6 +348,7 @@ export function evaluateTimeline(
       activeStop: null,
       dwellProgress: 0,
       activeSegmentIndex: 0,
+      activeTransportMode: journey.segments[0]?.transportMode ?? 'car',
     };
   }
 
@@ -373,6 +377,9 @@ export function evaluateTimeline(
       ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, null)
       : null;
 
+    const activeSegment = journey.segments[activeSegmentIndex];
+    const activeTransportMode = activeSegment?.transportMode ?? 'car';
+
     return {
       position: point,
       bearing,
@@ -386,6 +393,7 @@ export function evaluateTimeline(
       activeStop: null,
       dwellProgress: 0,
       activeSegmentIndex,
+      activeTransportMode,
     };
   }
 
@@ -469,6 +477,9 @@ export function evaluateTimeline(
     ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, activeStop)
     : null;
 
+  const activeSegment = journey.segments[activeSegmentIndex];
+  const activeTransportMode = activeSegment?.transportMode ?? 'car';
+
   return {
     position,
     bearing,
@@ -482,6 +493,7 @@ export function evaluateTimeline(
     activeStop,
     dwellProgress,
     activeSegmentIndex,
+    activeTransportMode,
   };
 }
 

@@ -12,6 +12,7 @@ import type {
   MediaAsset,
   StoryScene,
   TransitionType,
+  TransportMode,
 } from '../types';
 import type { EvaluatedAudioState } from '../audio/types';
 
@@ -76,6 +77,8 @@ export interface RenderFrame {
   bearing: number;
   /** Active route segment index */
   segmentIndex: number;
+  /** Active transport mode for this frame (car, bus, train, hiker, motorcycle, bicycle, boat, airplane) */
+  transportMode?: TransportMode;
   /** Whether the traveler is currently dwelling at a stop */
   isDwelling: boolean;
   /** The stop currently dwelling at or highlighting, if any */
