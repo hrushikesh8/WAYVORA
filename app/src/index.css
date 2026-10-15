@@ -1090,4 +1090,74 @@ input[type="range"]::-webkit-slider-thumb {
   color: #a5f3fc;
 }
 
+/* ─── Cinematic Camera & Keyframes ─── */
+.camera-clearance-hud {
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.camera-clearance-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 10px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+.clearance-safe {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.clearance-averted {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.keyframe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.keyframe-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  gap: 6px;
+}
+.keyframe-item:hover {
+  border-color: var(--border-active);
+}
+.keyframe-time {
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  font-weight: 600;
+  font-size: 10px;
+}
+.keyframe-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+
 

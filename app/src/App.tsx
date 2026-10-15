@@ -12,7 +12,7 @@ import {
 import { evaluateTimeline, getEffectiveDuration } from './domain/timeline';
 import { deserializeProject, downloadProject } from './domain/serialization';
 import { totalDistance, computeBounds } from './domain/geo';
-import type { Journey, TransportMode, CameraMode } from './domain/types';
+import type { Journey, TransportMode, CameraMode, CameraKeyframe } from './domain/types';
 import { parseGpx, appendGpxToJourney, type GpxParseResult } from './domain/gpx';
 import {
   insertRoutePoint,
@@ -38,7 +38,13 @@ import {
   type RoutingProfile,
 } from './domain/routing';
 import { auditJourneyDiagnostics } from './domain/diagnostics';
-import { evaluateCameraClearance } from './domain/camera';
+import {
+  evaluateCameraClearance,
+  evaluateCameraAtTime,
+  calculateCameraEyePosition,
+  generateAutoCamKeyframes,
+  type CameraClearanceResult,
+} from './domain/camera';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -73,6 +79,12 @@ const PRESET_JOURNEYS = [
   { id: 'california', title: 'California Roadtrip (SF to LA)', data: SF_TO_LA_WAYPOINTS },
   { id: 'sierra', title: 'Mt. Whitney Alpine Ascent (Trail)', data: SIERRA_TRAIL_WAYPOINTS },
 ];
+
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 export default function App() {
   const [selectedPreset, setSelectedPreset] = useState('alps');
@@ -116,6 +128,13 @@ export default function App() {
   const [isTerrain3dEnabled, setIsTerrain3dEnabled] = useState(true);
   const [terrainExaggeration, setTerrainExaggeration] = useState(1.2);
   const [terrainStatus, setTerrainStatus] = useState<'ready' | 'fallback' | 'disabled'>('ready');
+
+  // Cinematic Camera & Keyframe State
+  const [isKeyframeTrackActive, setIsKeyframeTrackActive] = useState<boolean>(() => {
+    return (journey.timeline.keyframes && journey.timeline.keyframes.length > 0) ? true : false;
+  });
+  const [cameraKeyframes, setCameraKeyframes] = useState<CameraKeyframe[]>(() => journey.timeline.keyframes ?? []);
+  const [liveClearance, setLiveClearance] = useState<CameraClearanceResult | null>(null);
 
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -422,35 +441,96 @@ export default function App() {
 
     const map = mapInstanceRef.current;
     if (!map) return;
-
-    // Evaluate camera ground clearance to prevent clipping through mountain peaks
-    const clearance = evaluateCameraClearance(
-      position,
-      cameraMode,
-      mapPitch,
-      mapZoom,
-      position.ele
-    );
-    const effectivePitch = clearance.isClippingAverted ? clearance.clampedPitch : mapPitch;
-
-    if (cameraMode === 'chase') {
-      map.easeTo({
-        center: [position.lng, position.lat],
-        bearing: bearing,
-        pitch: effectivePitch,
-        zoom: mapZoom,
-        duration: 80,
-      });
-    } else if (cameraMode === 'ground') {
-      map.easeTo({
-        center: [position.lng, position.lat],
-        bearing: bearing,
-        pitch: Math.max(60, effectivePitch),
-        zoom: Math.max(14, mapZoom),
-        duration: 80,
-      });
+    // Calculate 3D camera eye coordinate
+    const eyeCalc = calculateCameraEyePosition(position, bearing, mapPitch, mapZoom);
+    let groundEleAtCam = position.ele ?? 0;
+    if (map.queryTerrainElevation) {
+      try {
+        const qEle = map.queryTerrainElevation([eyeCalc.cameraEye.lng, eyeCalc.cameraEye.lat]);
+        if (typeof qEle === 'number' && Number.isFinite(qEle)) {
+          groundEleAtCam = qEle;
+        }
+      } catch {
+        // Fallback cleanly
+      }
     }
-  }, [currentFrame, cameraMode, mapPitch, mapZoom]);
+
+    if (isKeyframeTrackActive && cameraKeyframes.length > 0) {
+      // Deterministic keyframe track interpolation
+      const camState = evaluateCameraAtTime(
+        cameraKeyframes,
+        currentFrame.time,
+        position,
+        bearing,
+        cameraMode,
+        groundEleAtCam
+      );
+
+      setLiveClearance({
+        targetElevation: position.ele ?? 0,
+        groundElevationAtCamera: camState.groundElevationAtCamera,
+        calculatedCameraAltitude: camState.calculatedCameraAltitude,
+        effectiveCameraAltitude: camState.effectiveCameraAltitude,
+        clearanceMetres: camState.clearanceMetres,
+        clampedPitch: camState.clampedPitch,
+        isClippingAverted: camState.isClippingAverted,
+      });
+
+      map.easeTo({
+        center: [camState.center.lng, camState.center.lat],
+        bearing: camState.bearing,
+        pitch: camState.pitch,
+        zoom: camState.zoom,
+        duration: 80,
+      });
+    } else {
+      // Manual route-following camera with terrain clearance
+      const clearance = evaluateCameraClearance(
+        position,
+        cameraMode,
+        mapPitch,
+        mapZoom,
+        groundEleAtCam
+      );
+      const effectivePitch = clearance.isClippingAverted ? clearance.clampedPitch : mapPitch;
+      setLiveClearance(clearance);
+
+      if (cameraMode === 'chase') {
+        map.easeTo({
+          center: [position.lng, position.lat],
+          bearing: bearing,
+          pitch: effectivePitch,
+          zoom: mapZoom,
+          duration: 80,
+        });
+      } else if (cameraMode === 'ground') {
+        map.easeTo({
+          center: [position.lng, position.lat],
+          bearing: bearing,
+          pitch: Math.max(60, effectivePitch),
+          zoom: Math.max(14, mapZoom),
+          duration: 80,
+        });
+      } else if (cameraMode === 'flyover') {
+        map.easeTo({
+          center: [position.lng, position.lat],
+          bearing: bearing,
+          pitch: Math.max(50, effectivePitch),
+          zoom: mapZoom,
+          duration: 80,
+        });
+      } else if (cameraMode === 'orbit') {
+        const orbitBearing = (bearing + (currentFrame.time * 20)) % 360;
+        map.easeTo({
+          center: [position.lng, position.lat],
+          bearing: orbitBearing,
+          pitch: effectivePitch,
+          zoom: mapZoom,
+          duration: 80,
+        });
+      }
+    }
+  }, [currentFrame, cameraMode, mapPitch, mapZoom, isKeyframeTrackActive, cameraKeyframes]);
 
   // Animation Loop
   useEffect(() => {
@@ -512,6 +592,73 @@ export default function App() {
     let updated = addSegmentToJourney(journey, newSeg);
     updated = addStopToJourney(updated, newStop);
     applyJourneyEdit(updated, `Added stop: ${name}`);
+  };
+
+  // Cinematic Camera Keyframe Actions
+  const handleGenerateAutoCam = () => {
+    const generated = generateAutoCamKeyframes(journey);
+    setCameraKeyframes(generated);
+    setIsKeyframeTrackActive(true);
+    const updated = {
+      ...journey,
+      timeline: {
+        ...journey.timeline,
+        keyframes: generated,
+      },
+    };
+    applyJourneyEdit(updated, `Generated ${generated.length} Cinematic Keyframes (AutoCam)`);
+  };
+
+  const handleAddKeyframeAtCurrentTime = () => {
+    const newKf: CameraKeyframe = {
+      id: `cam-kf-${Date.now()}`,
+      time: Math.round(currentTime * 10) / 10,
+      mode: cameraMode,
+      bearing: Math.round(currentFrame.bearing),
+      pitch: mapPitch,
+      zoom: mapZoom,
+      easing: 'easeInOutCubic',
+      label: `${cameraMode.toUpperCase()} at ${formatTime(currentTime)}`,
+    };
+    const next = [...cameraKeyframes.filter((k) => Math.abs(k.time - newKf.time) > 0.2), newKf].sort(
+      (a, b) => a.time - b.time
+    );
+    setCameraKeyframes(next);
+    setIsKeyframeTrackActive(true);
+    const updated = {
+      ...journey,
+      timeline: {
+        ...journey.timeline,
+        keyframes: next,
+      },
+    };
+    applyJourneyEdit(updated, `Added ${cameraMode.toUpperCase()} Keyframe at ${formatTime(currentTime)}`);
+  };
+
+  const handleDeleteKeyframe = (id: string) => {
+    const next = cameraKeyframes.filter((k) => k.id !== id);
+    setCameraKeyframes(next);
+    const updated = {
+      ...journey,
+      timeline: {
+        ...journey.timeline,
+        keyframes: next,
+      },
+    };
+    applyJourneyEdit(updated, 'Keyframe removed');
+  };
+
+  const handleClearKeyframes = () => {
+    setCameraKeyframes([]);
+    setIsKeyframeTrackActive(false);
+    const updated = {
+      ...journey,
+      timeline: {
+        ...journey.timeline,
+        keyframes: [],
+      },
+    };
+    applyJourneyEdit(updated, 'Cleared camera keyframes (Manual Follow active)');
   };
 
   // Route Editing Dispatchers
@@ -1525,9 +1672,12 @@ export default function App() {
           <div className="control-group">
             <div className="control-header">
               <span>Camera Director</span>
+              <span style={{ fontSize: '10px', color: isKeyframeTrackActive ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
+                {isKeyframeTrackActive ? 'Keyframe Track' : 'Manual Follow'}
+              </span>
             </div>
             <div className="camera-grid">
-              {(['overview', 'flyover', 'chase', 'ground'] as CameraMode[]).map((mode) => (
+              {(['overview', 'flyover', 'chase', 'ground', 'orbit'] as CameraMode[]).map((mode) => (
                 <button
                   key={mode}
                   className={`camera-card ${cameraMode === mode ? 'active' : ''}`}
@@ -1537,6 +1687,137 @@ export default function App() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Live Terrain Ground Clearance HUD */}
+          {liveClearance && (
+            <div className="control-group">
+              <div className="control-header">
+                <span>Terrain Clearance HUD</span>
+              </div>
+              <div className="camera-clearance-hud">
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Ground Under Camera:</span>
+                  <strong>{liveClearance.groundElevationAtCamera} m</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Camera Eye Altitude:</span>
+                  <strong>{liveClearance.effectiveCameraAltitude} m</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Ground Clearance:</span>
+                  <strong>{liveClearance.clearanceMetres} m</strong>
+                </div>
+                <div
+                  className={`camera-clearance-status ${
+                    liveClearance.isClippingAverted ? 'clearance-averted' : 'clearance-safe'
+                  }`}
+                >
+                  {liveClearance.isClippingAverted
+                    ? `⚠ Mountain Clipping Averted (Pitch: ${liveClearance.clampedPitch}°)`
+                    : '✓ Safe Terrain Clearance'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Cinematic Keyframe Sequencer */}
+          <div className="control-group">
+            <div className="control-header">
+              <span>Cinematic Keyframe Track</span>
+              <button
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: isKeyframeTrackActive ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+                onClick={() => {
+                  const next = !isKeyframeTrackActive;
+                  setIsKeyframeTrackActive(next);
+                  showNotification(next ? 'Keyframe Track Active' : 'Manual Route Follow Active');
+                }}
+              >
+                {isKeyframeTrackActive ? 'TRACK: ON' : 'TRACK: OFF'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                className="btn-ghost"
+                style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
+                onClick={handleGenerateAutoCam}
+                title="Synthesize smart camera keyframe sequence honoring roads, trails and stop dwells"
+              >
+                ✨ AutoCam
+              </button>
+              <button
+                className="btn-ghost"
+                style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
+                onClick={handleAddKeyframeAtCurrentTime}
+                title="Add camera keyframe at current playhead time"
+              >
+                ➕ Add KF
+              </button>
+              {cameraKeyframes.length > 0 && (
+                <button
+                  className="btn-ghost"
+                  style={{ fontSize: '10px', padding: '0 8px' }}
+                  onClick={handleClearKeyframes}
+                  title="Clear all keyframes"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Keyframe List */}
+            {cameraKeyframes.length > 0 ? (
+              <div className="keyframe-list">
+                {cameraKeyframes.map((kf) => (
+                  <div key={kf.id} className="keyframe-item">
+                    <span className="keyframe-time">{formatTime(kf.time)}</span>
+                    <span className="keyframe-badge">{kf.mode}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      {kf.pitch}°/{kf.zoom}x
+                    </span>
+                    <button
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--accent-cyan)',
+                        fontSize: '10px',
+                        cursor: 'pointer',
+                        padding: '0 4px',
+                      }}
+                      onClick={() => setCurrentTime(kf.time)}
+                      title="Seek to keyframe"
+                    >
+                      ▶
+                    </button>
+                    <button
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#f87171',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        padding: '0 4px',
+                      }}
+                      onClick={() => handleDeleteKeyframe(kf.id)}
+                      title="Delete keyframe"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                No custom keyframes. Click &quot;✨ AutoCam&quot; to synthesize a cinematic camera sequence.
+              </div>
+            )}
           </div>
 
           <div className="control-group">

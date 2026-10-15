@@ -8,6 +8,7 @@
 import type { Journey, RoutePoint, Scene, CameraParams, Stop } from './types';
 import { computeCumulativeDistances, interpolateRoute, haversineDistance } from './geo';
 import { getAllPoints } from './journey';
+import { evaluateCameraAtTime, type EvaluatedCameraState } from './camera';
 
 export interface FrameState {
   /** Current position on the route */
@@ -20,6 +21,8 @@ export interface FrameState {
   scene: Scene | null;
   /** Camera parameters for this frame */
   camera: CameraParams | null;
+  /** Evaluated cinematic camera state (if keyframes or camera director active) */
+  cameraState?: EvaluatedCameraState | null;
   /** Time in seconds */
   time: number;
   /** Whether the traveler is currently dwelling/paused at a stop */
@@ -257,6 +260,7 @@ export function evaluateTimeline(
       progress,
       scene: null,
       camera: null,
+      cameraState: null,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -276,6 +280,7 @@ export function evaluateTimeline(
       progress,
       scene: journey.timeline.scenes[0] ?? null,
       camera: journey.timeline.scenes[0]?.params ?? null,
+      cameraState: null,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -302,6 +307,9 @@ export function evaluateTimeline(
     const { point, bearing } = interpolateRoute(allPoints, cumulativeDistances, progress);
     const activeSegmentIndex = findActiveSegmentIndex(journey, progress);
     const activeScene = findActiveScene(journey.timeline.scenes, progress);
+    const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
+      ? evaluateCameraAtTime(journey.timeline.keyframes, t, point, bearing, activeScene?.cameraMode ?? 'chase')
+      : null;
 
     return {
       position: point,
@@ -309,6 +317,7 @@ export function evaluateTimeline(
       progress,
       scene: activeScene,
       camera: activeScene?.params ?? null,
+      cameraState,
       time: t,
       isDwelling: false,
       activeStop: null,
@@ -390,6 +399,9 @@ export function evaluateTimeline(
 
   const activeSegmentIndex = findActiveSegmentIndex(journey, spatialProgress);
   const activeScene = findActiveScene(journey.timeline.scenes, spatialProgress);
+  const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
+    ? evaluateCameraAtTime(journey.timeline.keyframes, t, position, bearing, activeScene?.cameraMode ?? 'chase')
+    : null;
 
   return {
     position,
@@ -397,6 +409,7 @@ export function evaluateTimeline(
     progress: spatialProgress,
     scene: activeScene,
     camera: activeScene?.params ?? null,
+    cameraState,
     time: t,
     isDwelling,
     activeStop,

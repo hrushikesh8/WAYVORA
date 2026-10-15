@@ -178,4 +178,28 @@ Define a clean, provider-independent `RoutingAdapter` interface with typed `Rout
 - AWS Open Data Terrarium tiles provide global coverage (SRTM/NED/ArcticDEM) without proprietary API keys or per-tile billing.
 - Decouples domain elevation queries from MapLibre canvas state for headless testing and export pipeline determinism.
 
+---
+
+## ADR-010: Deterministic Cinematic Camera Engine, Keyframe Track, and Terrain Ground Clearance
+
+**Status**: ACCEPTED  
+**Date**: 2026-10-15
+
+**Context**: Simple static camera pitch and zoom values produce robotic, jarring playback and frequently clip into mountain ridges on steep alpine trails. Users require cinematic motion (overview establishing shots, smooth road chasing, gentle stop dwell orbits, and summit flyovers) with deterministic keyframe interpolation, angle wrapping, and reliable terrain clearance.
+
+**Decision**:
+1. Implement a pure domain camera engine (`app/src/domain/camera.ts`) with typed `CameraKeyframe`, `CameraEasing`, and `EvaluatedCameraState`.
+2. Ensure mathematical determinism: given timeline time $t$ and keyframes, `evaluateCameraAtTime` computes the exact camera state with zero stateful memory.
+3. Handle angle wrapping across the 0°/360° boundary via shortest angular delta $((\Delta\theta + 540) \pmod{360}) - 180$.
+4. Calculate 3D camera eye coordinates geographically using pure spherical geodesics (`destinationPoint`) and query terrain elevation directly under the eye using MapLibre's `queryTerrainElevation`.
+5. Implement dynamic pitch clamping and altitude elevation (`evaluateCameraClearance`): if ground elevation under the camera eye exceeds camera altitude minus safe clearance, pitch is automatically clamped to maintain visual line of sight above mountain ridges.
+6. Provide an intelligent `generateAutoCamKeyframes` generator that analyzes journey duration, transport mode transitions, stop dwell periods, and summits to synthesize an optimal camera choreography.
+7. Seamlessly integrate into both the timeline evaluator (`evaluateTimeline`) and the interactive studio inspector with real-time Ground Clearance HUD and Keyframe Sequencer.
+
+**Rationale**:
+- Complete determinism guarantees identical camera framing between interactive browser preview and offline video export.
+- Spherical geodesics and angle wrapping eliminate sudden 360° camera spins or antimeridian distortions.
+- Mountain collision aversion prevents the camera from clipping into rock faces during steep mountain ascents.
+
+
 

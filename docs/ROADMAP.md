@@ -135,14 +135,38 @@
 
 
 ## Phase 5: Cinematic Camera Engine & Scene Director
-**Status**: PROPOSED
+**Status**: VERIFIED & COMPLETE (2026-10-15)
 
-- Camera modes: Overview, Flyover, Chase, Ground, Orbit
-- Scene editor with camera mode per scene
-- Timeline scrubber with scene boundaries
-- Camera keyframe spline interpolation
-- AutoCam: follow route with heading and pitch smoothing
-- Horizon and sky atmosphere rendering in 3D mode
+- [x] Provider-Independent Cinematic Camera Domain (`app/src/domain/camera.ts`):
+  - Typed models: `CameraKeyframe`, `CameraEasing`, `EvaluatedCameraState`, `CameraClearanceResult`, `CameraMode`.
+  - Pure mathematical easing curves: `linear`, `easeInQuad`, `easeOutQuad`, `easeInOutQuad`, `easeInOutCubic`, `smoothstep`.
+  - Angle wrapping across the 0°/360° boundary taking the shortest angular delta $((\Delta\theta + 540) \pmod{360}) - 180$.
+  - Coordinate interpolation across the antimeridian via `shortestLngDelta` and `normalizeLng`.
+  - Look-ahead route lead calculation (`destinationPoint(target, bearing, lookAheadMeters)`).
+- [x] Deterministic Camera Keyframe Interpolator:
+  - `evaluateCameraAtTime(keyframes, time, fallbackTarget, fallbackBearing, fallbackMode, groundEleAtCam)` evaluates camera center, bearing, pitch, zoom, and eye position purely as a function of time.
+  - Boundary behavior: clamps to exact first and last keyframe parameters when out of bounds.
+  - Smooth keyframe blending with eased interpolation between adjacent keyframes.
+  - Zero stateful dependency: repeated seeking to time $t$ yields identical floating-point values.
+- [x] 3D Terrain Clearance & Mountain Collision Prevention:
+  - Spherical geodesic camera eye computation (`calculateCameraEyePosition`).
+  - True ground elevation sampling directly under camera eye via MapLibre's `map.queryTerrainElevation`.
+  - Dynamic pitch clamping and altitude elevation (`evaluateCameraClearance`): detects when camera eye descends below mountain terrain + clearance buffer, clamping pitch to maintain line of sight.
+  - Clean fallback when terrain is disabled or tiles are not yet loaded.
+- [x] AutoCam Composition Generator (`generateAutoCamKeyframes`):
+  - Analyzes journey duration, transport modes, stop dwells, and summits to synthesize an optimal cinematic camera track.
+  - Establishing panoramic overview at $t = 0$.
+  - Smooth road/trail chase following with look-ahead lead.
+  - Stop dwell approach, flyover, and gentle orbit.
+  - Final destination panoramic overview.
+- [x] Studio User Interface & Real-Time Inspector (`app/src/App.tsx`, `app/src/index.css`):
+  - 5 Cinematic Camera Modes: `OVERVIEW`, `FLYOVER`, `CHASE`, `GROUND`, `ORBIT`.
+  - Live Terrain Clearance HUD: displays ground elevation at camera eye, camera altitude, ground clearance buffer, and collision aversion badge.
+  - Cinematic Keyframe Track: toggle ON/OFF, "✨ AutoCam" one-click sequencer, "➕ Add KF" at playhead, seek to keyframe (▶), and delete keyframe (×).
+- [x] Automated Testing Suite: 148 tests passing across 12 test suites (including 19 camera domain tests in `app/src/__tests__/camera.test.ts`).
+- [x] Strict TypeScript build passing (`tsc -b && vite build` in ~505ms).
+- [x] End-to-end browser smoke test verified: AutoCam generation, keyframe seeking, manual camera modes (orbit/chase), Mt. Whitney Alpine Ascent (4421m), and clearance HUD with WebP recording (`phase5_cinematic_camera_smoke_1792047911221.webp`).
+
 
 ## Phase 6: Media, Annotations & Audio
 **Status**: PROPOSED

@@ -80,6 +80,37 @@ export function bearing(a: RoutePoint, b: RoutePoint): number {
 }
 
 /**
+ * Destination point given start point, initial bearing (deg), and distance (metres).
+ * Pure spherical geodesics formula.
+ */
+export function destinationPoint(
+  start: RoutePoint,
+  bearingDeg: number,
+  distanceMeters: number
+): RoutePoint {
+  if (distanceMeters === 0) return { ...start };
+  const dByR = distanceMeters / EARTH_RADIUS_M;
+  const brng = toRad(bearingDeg);
+  const lat1 = toRad(start.lat);
+  const lng1 = toRad(start.lng);
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(dByR) +
+    Math.cos(lat1) * Math.sin(dByR) * Math.cos(brng)
+  );
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(brng) * Math.sin(dByR) * Math.cos(lat1),
+    Math.cos(dByR) - Math.sin(lat1) * Math.sin(lat2)
+  );
+
+  return {
+    lng: normalizeLng(toDeg(lng2)),
+    lat: toDeg(lat2),
+    ele: start.ele,
+  };
+}
+
+/**
  * Interpolate position along a route by fractional progress (0..1).
  * Uses cumulative distances for uniform speed.
  * Returns the interpolated RoutePoint and bearing.

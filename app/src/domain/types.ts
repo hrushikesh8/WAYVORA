@@ -137,12 +137,39 @@ export interface Scene {
   params: CameraParams;
 }
 
+export type CameraEasing = 'linear' | 'easeInQuad' | 'easeOutQuad' | 'easeInOutQuad' | 'easeInOutCubic' | 'smoothstep';
+
+export interface CameraKeyframe {
+  id: string;
+  /** Timeline time in seconds */
+  time: number;
+  /** Target geographic position to frame (if omitted/null, follows traveler on route) */
+  targetPosition?: RoutePoint | null;
+  /** Cinematic camera mode */
+  mode: CameraMode;
+  /** Camera orientation and perspective */
+  bearing: number; // 0..360 deg
+  pitch: number;   // 0..85 deg
+  zoom: number;    // Map zoom level
+  /** Distance in meters from eye to target */
+  distanceMeters?: number;
+  /** Look-ahead lead along the route in meters */
+  lookAheadMeters?: number;
+  /** Target coordinate offset in meters */
+  targetOffset?: { x: number; y: number; z: number };
+  /** Easing function towards the next keyframe */
+  easing?: CameraEasing;
+  /** Descriptive label (e.g. "Starting Panorama", "Alpine Ridge Chase", "Summit Orbit") */
+  label?: string;
+}
+
 // ── Timeline ──
 
 export interface Timeline {
   duration: number; // seconds
   fps: number;
   scenes: Scene[];
+  keyframes?: CameraKeyframe[]; // optional cinematic keyframe track
   currentTime: number;
   stopDwell?: boolean; // enable deterministic stop dwell in playback
 }
