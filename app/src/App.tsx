@@ -9,11 +9,27 @@ import {
   addSegmentToJourney,
   createRoutePoint,
 } from './domain/journey';
-import { evaluateTimeline } from './domain/timeline';
+import { evaluateTimeline, getEffectiveDuration } from './domain/timeline';
 import { deserializeProject, downloadProject } from './domain/serialization';
 import { totalDistance, computeBounds } from './domain/geo';
 import type { Journey, TransportMode, CameraMode } from './domain/types';
 import { parseGpx, appendGpxToJourney, type GpxParseResult } from './domain/gpx';
+import {
+  insertRoutePoint,
+  moveRoutePoint,
+  deleteRoutePoint,
+  updateStop,
+  deleteStop,
+  updateSegmentMode,
+  createEditorHistory,
+  pushEditorHistory,
+  undoEditorHistory,
+  redoEditorHistory,
+  canUndo,
+  canRedo,
+  getSegmentEditAudit,
+  type EditorHistory,
+} from './domain/editor';
 import { MIXED_JOURNEY_WAYPOINTS, SF_TO_LA_WAYPOINTS } from './__tests__/fixtures';
 
 // Additional sample journey: Pacific Crest High Sierra Trail
@@ -64,13 +80,22 @@ export default function App() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('overview');
   const [mapPitch, setMapPitch] = useState(45);
   const [mapZoom, setMapZoom] = useState(11);
-  const [activeTab, setActiveTab] = useState<'stops' | 'stats'>('stops');
+  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'stats'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
 
   // GPX Import State
   const [gpxResult, setGpxResult] = useState<GpxParseResult | null>(null);
   const [isGpxModalOpen, setIsGpxModalOpen] = useState(false);
   const gpxFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Route Editing & Undo/Redo State
+  const [editorHistory, setEditorHistory] = useState<EditorHistory>(() =>
+    createEditorHistory(journey)
+  );
+  const [isSaved, setIsSaved] = useState(true);
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
+  const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [stopDwellEnabled, setStopDwellEnabled] = useState(true);
 
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -80,11 +105,27 @@ export default function App() {
   const lastTimestampRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-
   // Derived metrics
   const allPoints = useMemo(() => getAllPoints(journey), [journey]);
   const journeyTotalDistance = useMemo(() => totalDistance(allPoints), [allPoints]);
-  const currentFrame = useMemo(() => evaluateTimeline(journey, currentTime), [journey, currentTime]);
+
+  const activeJourney = useMemo(
+    () => ({
+      ...journey,
+      timeline: { ...journey.timeline, stopDwell: stopDwellEnabled },
+    }),
+    [journey, stopDwellEnabled]
+  );
+
+  const effectiveDuration = useMemo(
+    () => (stopDwellEnabled ? getEffectiveDuration(activeJourney) : journey.timeline.duration),
+    [activeJourney, stopDwellEnabled, journey.timeline.duration]
+  );
+
+  const currentFrame = useMemo(
+    () => evaluateTimeline(activeJourney, currentTime, { stopDwell: stopDwellEnabled }),
+    [activeJourney, currentTime, stopDwellEnabled]
+  );
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -98,10 +139,15 @@ export default function App() {
     if (!preset) return;
     const newJourney = journeyFromWaypoints(preset.title, preset.data);
     setJourney(newJourney);
+    setEditorHistory(createEditorHistory(newJourney));
+    setIsSaved(true);
+    setSelectedSegmentId(null);
+    setSelectedPointIndex(null);
     setCurrentTime(0);
     setIsPlaying(false);
     showNotification(`Loaded preset: ${preset.title}`);
   };
+
 
   // Initialize MapLibre
   useEffect(() => {
@@ -177,6 +223,53 @@ export default function App() {
         },
       });
 
+      // Editable segment points source
+      map.addSource('segment-points-source', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [],
+        },
+      });
+
+      // Segment points layer
+      map.addLayer({
+        id: 'segment-points-layer',
+        type: 'circle',
+        source: 'segment-points-source',
+        paint: {
+          'circle-radius': [
+            'case',
+            ['boolean', ['get', 'selected'], false],
+            8,
+            5,
+          ],
+          'circle-color': [
+            'case',
+            ['boolean', ['get', 'selected'], false],
+            '#00f2fe',
+            '#fbbf24',
+          ],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#0d1117',
+        },
+      });
+
+      map.on('click', 'segment-points-layer', (e) => {
+        if (e.features && e.features.length > 0) {
+          const ptIdx = e.features[0].properties?.pointIndex;
+          if (typeof ptIdx === 'number') {
+            setSelectedPointIndex(ptIdx);
+          }
+        }
+      });
+      map.on('mouseenter', 'segment-points-layer', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'segment-points-layer', () => {
+        map.getCanvas().style.cursor = '';
+      });
+
       // Fit map to bounds
       fitMapToBounds(map, allPoints);
     });
@@ -218,6 +311,43 @@ export default function App() {
       { padding: 80, duration: 1200, pitch: mapPitch }
     );
   };
+
+  // Sync editable segment vertices on map
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    const source = map.getSource('segment-points-source') as GeoJSONSource | undefined;
+    if (!source) return;
+
+    if (!selectedSegmentId) {
+      source.setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
+
+    const seg = journey.segments.find((s) => s.id === selectedSegmentId);
+    if (!seg) {
+      source.setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
+
+    const features = seg.points.map((pt, idx) => ({
+      type: 'Feature' as const,
+      properties: {
+        pointIndex: idx,
+        selected: selectedPointIndex === idx,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [pt.lng, pt.lat],
+      },
+    }));
+
+    source.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }, [selectedSegmentId, selectedPointIndex, journey]);
 
   // Sync Marker & Camera on frame update
   useEffect(() => {
@@ -272,9 +402,9 @@ export default function App() {
 
       setCurrentTime((prev) => {
         const next = prev + deltaSeconds * playbackSpeed;
-        if (next >= journey.timeline.duration) {
+        if (next >= effectiveDuration) {
           setIsPlaying(false);
-          return journey.timeline.duration;
+          return effectiveDuration;
         }
         return next;
       });
@@ -287,15 +417,16 @@ export default function App() {
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isPlaying, playbackSpeed, journey.timeline.duration]);
+  }, [isPlaying, playbackSpeed, effectiveDuration]);
 
   // Timeline scrub handler
   const handleTimelineScrub = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, clickX / rect.width));
-    setCurrentTime(ratio * journey.timeline.duration);
+    setCurrentTime(ratio * effectiveDuration);
   };
+
 
   // Add waypoint modal / prompt
   const handleAddStop = () => {
@@ -310,13 +441,128 @@ export default function App() {
 
     let updated = addSegmentToJourney(journey, newSeg);
     updated = addStopToJourney(updated, newStop);
-    setJourney(updated);
-    showNotification(`Added stop: ${name}`);
+    applyJourneyEdit(updated, `Added stop: ${name}`);
   };
+
+  // Route Editing Dispatchers
+  const applyJourneyEdit = (newJourney: Journey, notificationMsg?: string) => {
+    setJourney(newJourney);
+    setEditorHistory((h) => pushEditorHistory(h, newJourney));
+    setIsSaved(false);
+    if (notificationMsg) showNotification(notificationMsg);
+  };
+
+  const handleUndo = () => {
+    if (!canUndo(editorHistory)) return;
+    const nextH = undoEditorHistory(editorHistory);
+    setEditorHistory(nextH);
+    setJourney(nextH.present);
+    setIsSaved(false);
+    showNotification('Undo applied');
+  };
+
+  const handleRedo = () => {
+    if (!canRedo(editorHistory)) return;
+    const nextH = redoEditorHistory(editorHistory);
+    setEditorHistory(nextH);
+    setJourney(nextH.present);
+    setIsSaved(false);
+    showNotification('Redo applied');
+  };
+
+  const handleInsertPointInSegment = (segmentId: string, atEnd: boolean) => {
+    const seg = journey.segments.find((s) => s.id === segmentId);
+    if (!seg || seg.points.length === 0) return;
+    const refPoint = atEnd ? seg.points[seg.points.length - 1] : seg.points[0];
+    const offsetLng = atEnd ? 0.015 : -0.015;
+    const offsetLat = atEnd ? 0.01 : -0.01;
+    const newPoint = createRoutePoint(
+      refPoint.lng + offsetLng,
+      refPoint.lat + offsetLat,
+      refPoint.ele != null ? refPoint.ele + 50 : undefined
+    );
+    const insertIdx = atEnd ? seg.points.length : 0;
+    try {
+      const updated = insertRoutePoint(journey, segmentId, insertIdx, newPoint);
+      applyJourneyEdit(updated, `Inserted point ${atEnd ? 'at end' : 'at start'}`);
+      setSelectedPointIndex(insertIdx);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleMoveSelectedPoint = (lat: number, lng: number, ele?: number) => {
+    if (!selectedSegmentId || selectedPointIndex === null) return;
+    try {
+      const updated = moveRoutePoint(journey, selectedSegmentId, selectedPointIndex, { lat, lng, ele });
+      applyJourneyEdit(updated, `Moved point #${selectedPointIndex + 1}`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteSelectedPoint = () => {
+    if (!selectedSegmentId || selectedPointIndex === null) return;
+    try {
+      const updated = deleteRoutePoint(journey, selectedSegmentId, selectedPointIndex);
+      applyJourneyEdit(updated, `Deleted point #${selectedPointIndex + 1}`);
+      setSelectedPointIndex(null);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleUpdateStopDuration = (stopId: string, durationSeconds: number) => {
+    try {
+      const updated = updateStop(journey, stopId, { durationAtStop: durationSeconds });
+      applyJourneyEdit(updated, `Set dwell duration to ${durationSeconds}s`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteStopItem = (stopId: string) => {
+    try {
+      const updated = deleteStop(journey, stopId);
+      applyJourneyEdit(updated, 'Removed stop');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleChangeSegmentMode = (segmentId: string, mode: TransportMode) => {
+    try {
+      const updated = updateSegmentMode(journey, segmentId, mode);
+      applyJourneyEdit(updated, `Updated mode to ${mode.toUpperCase()}`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          e.preventDefault();
+          handleUndo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editorHistory]);
 
   // Project Export & Import
   const handleSaveProject = () => {
     downloadProject(journey);
+    setIsSaved(true);
     showNotification('Project downloaded as .wayvora.json');
   };
 
@@ -328,6 +574,10 @@ export default function App() {
       try {
         const restored = deserializeProject(reader.result as string);
         setJourney(restored);
+        setEditorHistory(createEditorHistory(restored));
+        setIsSaved(true);
+        setSelectedSegmentId(null);
+        setSelectedPointIndex(null);
         setCurrentTime(0);
         setIsPlaying(false);
         showNotification(`Loaded project: ${restored.name}`);
@@ -338,6 +588,7 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = '';
   };
+
 
   // GPX Import Handlers
   const handleSelectGpxFile = () => {
@@ -379,6 +630,10 @@ export default function App() {
     if (!gpxResult) return;
     const newJourney = gpxResult.toJourney();
     setJourney(newJourney);
+    setEditorHistory(createEditorHistory(newJourney));
+    setIsSaved(true);
+    setSelectedSegmentId(null);
+    setSelectedPointIndex(null);
     setSelectedPreset('custom');
     setCurrentTime(0);
     setIsPlaying(false);
@@ -393,14 +648,14 @@ export default function App() {
   const handleConfirmAppendGpx = () => {
     if (!gpxResult) return;
     const updated = appendGpxToJourney(journey, gpxResult);
-    setJourney(updated);
+    applyJourneyEdit(updated, `Appended GPX track to current journey (${updated.segments.length} segments)`);
     setIsGpxModalOpen(false);
-    showNotification(`Appended GPX track to current journey (${updated.segments.length} segments)`);
     const pts = getAllPoints(updated);
     if (mapInstanceRef.current && pts.length > 0) {
       fitMapToBounds(mapInstanceRef.current, pts);
     }
   };
+
 
   // Render Elevation Profile Path
   const elevationSvgPath = useMemo(() => {
@@ -449,6 +704,31 @@ export default function App() {
               <option value="custom">★ Imported GPX Journey</option>
             )}
           </select>
+
+          {isSaved ? (
+            <span className="save-badge save-badge-saved">✓ Saved</span>
+          ) : (
+            <span className="save-badge save-badge-unsaved">● Unsaved</span>
+          )}
+
+          <div className="undo-redo-group">
+            <button
+              className="btn-icon-undo"
+              onClick={handleUndo}
+              disabled={!canUndo(editorHistory)}
+              title="Undo edit (Ctrl+Z)"
+            >
+              ↺
+            </button>
+            <button
+              className="btn-icon-undo"
+              onClick={handleRedo}
+              disabled={!canRedo(editorHistory)}
+              title="Redo edit (Ctrl+Y)"
+            >
+              ↻
+            </button>
+          </div>
         </div>
 
         <div className="header-stats">
@@ -511,7 +791,13 @@ export default function App() {
               className={`tab-btn ${activeTab === 'stops' ? 'active' : ''}`}
               onClick={() => setActiveTab('stops')}
             >
-              Timeline Stops ({journey.stops.length})
+              Stops ({journey.stops.length})
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'segments' ? 'active' : ''}`}
+              onClick={() => setActiveTab('segments')}
+            >
+              Segments ({journey.segments.length})
             </button>
             <button
               className={`tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
@@ -607,10 +893,45 @@ export default function App() {
                         <div className="stop-header">
                           <span className="stop-name">{stop.name}</span>
                           <span className={`mode-badge mode-${mode}`}>{mode}</span>
+                          <button
+                            className="btn-ghost"
+                            style={{ padding: '0 4px', fontSize: '11px', color: '#ef4444' }}
+                            title="Delete Stop"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteStopItem(stop.id);
+                            }}
+                          >
+                            ✕
+                          </button>
                         </div>
                         <div className="stop-details">
                           <span>{stop.position.lat.toFixed(3)}°N, {stop.position.lng.toFixed(3)}°E</span>
                           {stop.position.ele != null && <span>▲ {stop.position.ele}m</span>}
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginTop: '6px',
+                            paddingTop: '6px',
+                            borderTop: '1px solid rgba(255,255,255,0.06)',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>⏸ Dwell Pause:</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="0"
+                              max="60"
+                              className="stop-dwell-input"
+                              value={stop.durationAtStop ?? 0}
+                              onChange={(e) => handleUpdateStopDuration(stop.id, Number(e.target.value))}
+                            />
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>sec</span>
+                          </div>
                         </div>
                       </div>
 
@@ -621,6 +942,173 @@ export default function App() {
                         </div>
                       )}
                     </React.Fragment>
+                  );
+                })}
+              </>
+            ) : activeTab === 'segments' ? (
+              <>
+                <div className="section-label">
+                  <span>Journey Segments ({journey.segments.length})</span>
+                </div>
+
+                {journey.segments.map((seg, sIdx) => {
+                  const audit = getSegmentEditAudit(seg);
+                  const isSelected = selectedSegmentId === seg.id;
+                  return (
+                    <div
+                      key={seg.id}
+                      className={`segment-editor-card ${isSelected ? 'selected' : ''}`}
+                      onClick={() => {
+                        setSelectedSegmentId(isSelected ? null : seg.id);
+                        setSelectedPointIndex(null);
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontWeight: 600, fontSize: '12px' }}>
+                          Segment #{sIdx + 1} ({seg.type.toUpperCase()})
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: audit.isModified ? 'rgba(245, 158, 11, 0.2)' : 'rgba(0, 242, 254, 0.1)',
+                            color: audit.isModified ? '#fbbf24' : '#00f2fe',
+                          }}
+                        >
+                          {audit.isModified ? '● Modified' : (audit.isOriginal ? '✓ GPX Track' : 'Manual')}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                        <span>Mode:</span>
+                        <select
+                          style={{
+                            background: 'rgba(0,0,0,0.4)',
+                            color: '#fff',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            padding: '2px 4px',
+                          }}
+                          value={seg.transportMode}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => handleChangeSegmentMode(seg.id, e.target.value as TransportMode)}
+                        >
+                          {['car', 'hike', 'bike', 'walk', 'train', 'bus', 'motorcycle', 'plane', 'boat'].map((m) => (
+                            <option key={m} value={m}>{m.toUpperCase()}</option>
+                          ))}
+                        </select>
+                        <span>• {seg.points.length} points</span>
+                      </div>
+
+                      {isSelected && (
+                        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.08)' }} onClick={(e) => e.stopPropagation()}>
+                          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                            <button
+                              className="btn-ghost"
+                              style={{ fontSize: '10px', padding: '4px 6px', flex: 1 }}
+                              onClick={() => handleInsertPointInSegment(seg.id, false)}
+                              title="Insert point at start of segment"
+                            >
+                              + Insert Start
+                            </button>
+                            <button
+                              className="btn-ghost"
+                              style={{ fontSize: '10px', padding: '4px 6px', flex: 1 }}
+                              onClick={() => handleInsertPointInSegment(seg.id, true)}
+                              title="Insert point at end of segment"
+                            >
+                              + Insert End
+                            </button>
+                          </div>
+
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                            Select point to inspect / edit:
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '100px', overflowY: 'auto', marginBottom: '8px' }}>
+                            {seg.points.map((_, pIdx) => (
+                              <button
+                                key={pIdx}
+                                className={`btn-ghost ${selectedPointIndex === pIdx ? 'active' : ''}`}
+                                style={{ padding: '2px 6px', fontSize: '10px' }}
+                                onClick={() => setSelectedPointIndex(pIdx)}
+                              >
+                                #{pIdx + 1}
+                              </button>
+                            ))}
+                          </div>
+
+                          {selectedPointIndex !== null && seg.points[selectedPointIndex] && (
+                            <div className="point-inspector-box">
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 600, color: '#00f2fe' }}>
+                                  Point #{selectedPointIndex + 1}
+                                </span>
+                                <button
+                                  className="btn-ghost"
+                                  style={{ padding: '2px 6px', fontSize: '10px', color: '#ef4444' }}
+                                  onClick={handleDeleteSelectedPoint}
+                                  disabled={seg.points.length <= 2}
+                                  title={seg.points.length <= 2 ? 'Segment must have at least 2 points' : 'Delete point'}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+
+                              <div className="point-inspector-grid">
+                                <div className="point-input-group">
+                                  <label>Latitude</label>
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={seg.points[selectedPointIndex].lat}
+                                    onChange={(e) =>
+                                      handleMoveSelectedPoint(
+                                        Number(e.target.value),
+                                        seg.points[selectedPointIndex!].lng,
+                                        seg.points[selectedPointIndex!].ele
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="point-input-group">
+                                  <label>Longitude</label>
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={seg.points[selectedPointIndex].lng}
+                                    onChange={(e) =>
+                                      handleMoveSelectedPoint(
+                                        seg.points[selectedPointIndex!].lat,
+                                        Number(e.target.value),
+                                        seg.points[selectedPointIndex!].ele
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="point-input-group">
+                                <label>Elevation (m)</label>
+                                <input
+                                  type="number"
+                                  step="1"
+                                  value={seg.points[selectedPointIndex].ele ?? 0}
+                                  onChange={(e) =>
+                                    handleMoveSelectedPoint(
+                                      seg.points[selectedPointIndex!].lat,
+                                      seg.points[selectedPointIndex!].lng,
+                                      Number(e.target.value)
+                                    )
+                                  }
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </>
@@ -636,10 +1124,14 @@ export default function App() {
                 <div style={{ color: 'var(--text-secondary)' }}>
                   Timeline Duration: <strong>{journey.timeline.duration}s @ {journey.timeline.fps} FPS</strong>
                 </div>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  Effective Duration (with Dwell): <strong>{effectiveDuration.toFixed(1)}s</strong>
+                </div>
               </div>
             )}
           </div>
         </aside>
+
 
         {/* Center: Interactive Map & Overlays */}
         <div className="studio-center">
@@ -667,6 +1159,12 @@ export default function App() {
               <span>Progress:</span>
               <strong>{(currentFrame.progress * 100).toFixed(1)}%</strong>
             </div>
+            {currentFrame.isDwelling && currentFrame.activeStop && (
+              <div className="hud-chip dwell-chip" style={{ background: 'rgba(245, 158, 11, 0.25)', border: '1px solid #f59e0b', color: '#fbbf24' }}>
+                <span>⏸ Dwelling:</span>
+                <strong>{currentFrame.activeStop.name} ({currentFrame.activeStop.durationAtStop ? `${(currentFrame.dwellProgress * currentFrame.activeStop.durationAtStop).toFixed(1)}s / ${currentFrame.activeStop.durationAtStop}s` : 'Paused'})</strong>
+              </div>
+            )}
           </div>
 
           {/* Map Right Quick Controls */}
@@ -831,7 +1329,7 @@ export default function App() {
               ⏮
             </button>
             <div className="timecode-display">
-              {currentTime.toFixed(1)}s <span>/ {journey.timeline.duration.toFixed(1)}s</span>
+              {currentTime.toFixed(1)}s <span>/ {effectiveDuration.toFixed(1)}s</span>
             </div>
           </div>
 
@@ -847,6 +1345,14 @@ export default function App() {
                 {spd}x
               </button>
             ))}
+            <button
+              className={`btn-ghost ${stopDwellEnabled ? 'active' : ''}`}
+              style={{ fontSize: '11px', padding: '2px 8px', marginLeft: '6px' }}
+              onClick={() => setStopDwellEnabled((v) => !v)}
+              title="Toggle Stop Dwell Pauses in Playback"
+            >
+              ⏸ Dwell: {stopDwellEnabled ? 'ON' : 'OFF'}
+            </button>
           </div>
         </div>
 
@@ -854,7 +1360,7 @@ export default function App() {
         <div className="timeline-track-wrapper" onClick={handleTimelineScrub}>
           <div
             className="timeline-progress-bar"
-            style={{ width: `${(currentTime / journey.timeline.duration) * 100}%` }}
+            style={{ width: `${(currentTime / effectiveDuration) * 100}%` }}
           />
           <div className="timeline-scene-markers">
             {journey.timeline.scenes.map((scene) => (
@@ -871,7 +1377,7 @@ export default function App() {
           </div>
           <div
             className="timeline-playhead"
-            style={{ left: `${(currentTime / journey.timeline.duration) * 100}%` }}
+            style={{ left: `${(currentTime / effectiveDuration) * 100}%` }}
           />
         </div>
       </footer>

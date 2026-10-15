@@ -89,9 +89,11 @@ export interface Stop {
   type: StopType;
   segmentIndex: number; // which segment this stop belongs to
   description?: string;
-  durationAtStop?: number; // seconds
+  durationAtStop?: number; // cinematic dwell duration in seconds
+  recordedDuration?: number; // real-world recorded elapsed time (seconds)
   media?: MediaAsset[];
 }
+
 
 // ── Media ──
 
@@ -142,7 +144,9 @@ export interface Timeline {
   fps: number;
   scenes: Scene[];
   currentTime: number;
+  stopDwell?: boolean; // enable deterministic stop dwell in playback
 }
+
 
 // ── Export ──
 

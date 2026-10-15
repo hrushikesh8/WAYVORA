@@ -39,14 +39,43 @@
 - [x] Strict TypeScript production build passing (`tsc -b && vite build`)
 - [x] End-to-end browser smoke test verified with WebP recording and screenshot artifacts
 
-## Phase 2: Route Editing & Routing Services
+## Phase 2: Route Editing & Deterministic Stop-Aware Playback
+**Status**: VERIFIED & COMPLETE (2026-10-15)
+
+- [x] Pure Domain Route Editor (`app/src/domain/editor.ts`):
+  - Segment selection and inspection with provenance and edit audit status (`isOriginal`, `isModified`, `originalFilename`, point count deltas)
+  - Safe point insertion (`insertRoutePoint`) at start, end, or arbitrary index
+  - Safe point moving (`moveRoutePoint`) with automatic synchronization of attached stops within 10m
+  - Safe point deletion (`deleteRoutePoint`) guarded by a strict minimum 2-point constraint (`EditError`)
+  - Stop editing (`updateStop`) and deletion (`deleteStop`)
+  - Transport mode editing (`updateSegmentMode`) with synchronized segment types
+  - Immutable undo/redo history stack (`createEditorHistory`, `pushEditorHistory`, `undoEditorHistory`, `redoEditorHistory`, `canUndo`, `canRedo`)
+- [x] Deterministic Stop-Aware Playback Engine (`app/src/domain/timeline.ts`):
+  - Pure deterministic phase scheduler (`computeTimelineSchedule`) decomposing journey into alternating Motion and Dwell phases
+  - Configured stop dwell durations (`Stop.durationAtStop`) modeled as cinematic dwell time
+  - Deterministic seeking before, during, and after stops (`isDwelling`, `activeStop`, `dwellProgress`)
+  - Precise boundary phase selection (at arrival $t = t_{\text{dwellStart}}$, traveler immediately dwells)
+  - Zero NaN protection for missing elevation or timestamps
+  - Backward compatibility: toggled via `stopDwell` property/option, smoothly falling back to continuous linear motion
+- [x] Studio UI Integration (`app/src/App.tsx`, `app/src/index.css`):
+  - Segments sidebar tab with segment cards, mode selector, and edit audit badges
+  - Point inspector with latitude, longitude, and elevation inputs
+  - Interactive MapLibre segment vertices layer (`segment-points-layer`) with clickable circles
+  - Navbar Undo (↺) and Redo (↻) buttons with keyboard shortcuts (`Ctrl+Z`, `Ctrl+Y`) and unsaved change indicator
+  - Stop dwell input (in seconds) in Stops/Waypoints tab
+  - Map Top HUD dwell chip displaying `⏸ Dwelling: [Stop Name] (x.xs / y.ys)`
+  - Timeline footer dwell toggle button (`⏸ Dwell: ON / OFF`) and effective duration synchronization
+- [x] Automated Testing Suite: 94 tests passing across 8 test suites (including 13 editor tests and 6 stop-playback tests)
+- [x] Strict TypeScript build passing (`tsc -b && vite build`)
+- [x] End-to-end browser smoke test verified with WebP recording and screenshot artifacts
+
+## Phase 3: Routing Services & Multi-Modal Routing
 **Status**: PROPOSED
 
-- Interactive map route vertex editing (drag/add/delete waypoints)
-- OSRM road routing integration for road segments
-- Great-circle air route computation for flights
-- Stop management (reorder, rename, transition duration adjuster)
-- Multiple transport modes per segment
+- OSRM road routing integration for road segments (free public demo API)
+- Valhalla / BRouter fallback options
+- Great-circle air route computation for flights and sea passages
+- Elevation profile enhancement via open elevation services
 
 
 ## Phase 2: Camera & Scene System
