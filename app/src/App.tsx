@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Map, Marker, type GeoJSONSource } from 'maplibre-gl';
+import { Map, Marker, setWorkerUrl, type GeoJSONSource } from 'maplibre-gl';
+import maplibreglWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+// Ensure MapLibre GL worker resolves cleanly in Vite dev server and production builds
+setWorkerUrl(maplibreglWorkerUrl);
 import {
   journeyFromWaypoints,
   getAllPoints,

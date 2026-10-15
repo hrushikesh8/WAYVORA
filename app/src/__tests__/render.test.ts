@@ -328,5 +328,11 @@ describe('Render Domain, Media Playback & Deterministic Rendering Foundation', (
       expect(frame.camera.mode).toBeDefined();
       expect(Number.isFinite(frame.position.lng)).toBe(true);
     });
+
+    it('configures MapLibre worker URL without throwing', async () => {
+      const { setWorkerUrl, getWorkerUrl } = await import('maplibre-gl');
+      setWorkerUrl('/assets/maplibre-gl-worker.mjs');
+      expect(getWorkerUrl()).toBe('/assets/maplibre-gl-worker.mjs');
+    });
   });
 });
