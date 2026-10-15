@@ -16,11 +16,11 @@ import {
   extractMapLibreProjectionMatrix,
   attachTransportMapLayers,
   syncTransportSourceData,
+  createProceduralModel,
   TRANSPORT_SOURCE_ID,
   TRANSPORT_SYMBOL_LAYER_ID,
   TRANSPORT_HALO_LAYER_ID,
   TRANSPORT_PULSE_LAYER_ID,
-  type CanonicalTransportMode,
 } from '../domain/transport';
 
 describe('Phase 3: 3D Transport Model Engine', () => {
@@ -51,18 +51,10 @@ describe('Phase 3: 3D Transport Model Engine', () => {
       }
     });
 
-    it('distinguishes between modes with registered 3D assets and 2D fallback-only modes', () => {
-      // Car is registered with verified in-house procedural 3D model
-      expect(has3DModelAsset('car')).toBe(true);
-
-      // Modes pending verified permissive 3D assets fall back honestly to 2D silhouettes
-      expect(has3DModelAsset('airplane')).toBe(false);
-      expect(has3DModelAsset('boat')).toBe(false);
-      expect(has3DModelAsset('bus')).toBe(false);
-      expect(has3DModelAsset('train')).toBe(false);
-      expect(has3DModelAsset('hiker')).toBe(false);
-      expect(has3DModelAsset('motorcycle')).toBe(false);
-      expect(has3DModelAsset('bicycle')).toBe(false);
+    it('registers verified in-house procedural 3D models for all 8 canonical modes', () => {
+      for (const mode of CANONICAL_TRANSPORT_MODES) {
+        expect(has3DModelAsset(mode)).toBe(true);
+      }
     });
   });
 
@@ -74,30 +66,21 @@ describe('Phase 3: 3D Transport Model Engine', () => {
       }
     });
 
-    it('falls back to 2D silhouette if a mode has no 3D asset regardless of setting', () => {
-      const fallbackModes: CanonicalTransportMode[] = [
-        'airplane',
-        'boat',
-        'bus',
-        'train',
-        'hiker',
-        'motorcycle',
-        'bicycle',
-      ];
-      for (const mode of fallbackModes) {
-        expect(resolveTransportRenderMode(mode, '3d-model', true)).toBe('2d-svg');
-        expect(resolveTransportRenderMode(mode, 'auto', true)).toBe('2d-svg');
-      }
+    it('falls back to 2D silhouette if a mode is unregistered or unsupported regardless of setting', () => {
+      expect(resolveTransportRenderMode('custom-unknown' as any, '3d-model', true)).toBe('2d-svg');
+      expect(resolveTransportRenderMode('custom-unknown' as any, 'auto', true)).toBe('2d-svg');
     });
 
     it('falls back to 2D silhouette when 3D asset is pending load or loading fails', () => {
-      // Car is registered, but asset not yet loaded
-      expect(resolveTransportRenderMode('car', '3d-model', false)).toBe('2d-svg');
-      expect(resolveTransportRenderMode('car', 'auto', false)).toBe('2d-svg');
+      for (const mode of CANONICAL_TRANSPORT_MODES) {
+        // When not loaded: resolves safely to 2D SVG silhouette
+        expect(resolveTransportRenderMode(mode, '3d-model', false)).toBe('2d-svg');
+        expect(resolveTransportRenderMode(mode, 'auto', false)).toBe('2d-svg');
 
-      // Once loaded, resolves to 3D model
-      expect(resolveTransportRenderMode('car', '3d-model', true)).toBe('3d-model');
-      expect(resolveTransportRenderMode('car', 'auto', true)).toBe('3d-model');
+        // Once loaded, resolves deterministically to 3D model
+        expect(resolveTransportRenderMode(mode, '3d-model', true)).toBe('3d-model');
+        expect(resolveTransportRenderMode(mode, 'auto', true)).toBe('3d-model');
+      }
     });
   });
 
@@ -271,4 +254,35 @@ describe('Phase 3: 3D Transport Model Engine', () => {
       );
     });
   });
+
+  describe('6. Procedural 3D Model Factory & Geometry Quality', () => {
+    it('instantiates valid Three.js groups with non-empty meshes for all 8 modes', () => {
+      for (const mode of CANONICAL_TRANSPORT_MODES) {
+        const group = createProceduralModel(mode);
+        expect(group).not.toBeNull();
+        expect(group?.name).toBe(`wayvora-model-${mode}`);
+        expect(group?.children.length).toBeGreaterThan(0);
+
+        let meshCount = 0;
+        group?.traverse((child) => {
+          if ((child as any).isMesh) {
+            meshCount++;
+            expect((child as any).geometry).toBeDefined();
+            expect((child as any).material).toBeDefined();
+          }
+        });
+        expect(meshCount).toBeGreaterThan(0);
+      }
+    });
+
+    it('preloads models into Transport3DModelLayer cache synchronously without network fetch', async () => {
+      const layer = new Transport3DModelLayer();
+      for (const mode of CANONICAL_TRANSPORT_MODES) {
+        const result = await layer.preloadModel(mode);
+        expect(result).not.toBeNull();
+        expect(layer.isModelCached(mode)).toBe(true);
+      }
+    });
+  });
 });
+

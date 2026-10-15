@@ -5,3 +5,4 @@ export * from './icons';
 export * from './renderer';
 export * from './modelRegistry';
 export * from './modelLayer';
+export * from './proceduralModels';
