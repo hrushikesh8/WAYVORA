@@ -18,7 +18,7 @@ import { evaluateTimeline, getEffectiveDuration } from './domain/timeline';
 import { deserializeProject, downloadProject } from './domain/serialization';
 import { saveProjectToStorage, loadProjectFromStorage } from './domain/storage';
 import { totalDistance, computeBounds } from './domain/geo';
-import type { Journey, TransportMode, CameraMode, CameraKeyframe } from './domain/types';
+import type { Journey, TransportMode, CameraMode, CameraKeyframe, TransitionType, TitleCardMotion, StoryTitleCards } from './domain/types';
 import { parseGpx, appendGpxToJourney, type GpxParseResult } from './domain/gpx';
 import {
   insertRoutePoint,
@@ -47,6 +47,8 @@ import {
   setAudioTrackVolume,
   setMasterAudioVolume,
   appendPlaceToJourney,
+  reorderStoryScenes,
+  updateTitleCards,
   type EditorHistory,
 } from './domain/editor';
 import { PlaceSearch } from './components/PlaceSearch';
@@ -62,6 +64,7 @@ import {
   createMediaAsset,
   parseJpegExif,
   generateDefaultStoryScenes,
+  generateDefaultTitleCards,
 } from './domain/story';
 import {
   OsrmRoutingProvider,
@@ -864,6 +867,29 @@ export default function App() {
     } catch (err: unknown) {
       console.warn('Delete scene error:', err);
     }
+  };
+
+  const handleReorderStoryScene = (fromIndex: number, toIndex: number) => {
+    try {
+      const updated = reorderStoryScenes(journey, fromIndex, toIndex);
+      applyJourneyEdit(updated, 'Reordered story scene');
+    } catch (err: unknown) {
+      console.warn('Reorder scene error:', err);
+    }
+  };
+
+  const handleUpdateTitleCards = (updates: Partial<StoryTitleCards>) => {
+    try {
+      const updated = updateTitleCards(journey, updates);
+      applyJourneyEdit(updated, 'Updated title cards');
+    } catch (err: unknown) {
+      console.warn('Update title cards error:', err);
+    }
+  };
+
+  const handleInitDefaultTitleCards = () => {
+    const defaults = generateDefaultTitleCards(journey);
+    handleUpdateTitleCards(defaults);
   };
 
   const handleSceneMediaSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2714,8 +2740,44 @@ export default function App() {
             />
           </div>
 
-          {/* Cinematic Story Overlays (Canvas Layer) */}
-          {currentFrame.storyState?.title && (
+          {/* Cinematic Opening / Closing Full Title Card */}
+          {currentFrame.storyState?.activeTitleCard && currentFrame.storyState.activeTitleCard.opacity > 0.01 && (
+            <div
+              className={`cinematic-full-title-card ${currentFrame.storyState.activeTitleCard.type}`}
+              style={{
+                opacity: currentFrame.storyState.activeTitleCard.opacity,
+                transform: currentFrame.storyState.activeTitleCard.motion === 'slow-zoom'
+                  ? `scale(${1.0 + currentFrame.storyState.activeTitleCard.progress * 0.04})`
+                  : undefined,
+              }}
+            >
+              <div className="title-card-box">
+                <span className="title-card-badge">
+                  {currentFrame.storyState.activeTitleCard.type === 'opening'
+                    ? '◆ WAYVORA EXPEDITION'
+                    : '◆ EXPEDITION COMPLETE'}
+                </span>
+                <div className="title-card-headline">{currentFrame.storyState.activeTitleCard.title}</div>
+                {currentFrame.storyState.activeTitleCard.subtitle && (
+                  <div className="title-card-subline">{currentFrame.storyState.activeTitleCard.subtitle}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Cinematic Transition Veil */}
+          {currentFrame.storyState?.transition && (
+            <div
+              className="cinematic-transition-veil"
+              style={{
+                opacity: Math.sin(currentFrame.storyState.transition.progress * Math.PI) * (currentFrame.storyState.transition.type === 'fade-black' ? 0.96 : 0.88),
+                background: currentFrame.storyState.transition.type === 'fade-black' ? '#03060c' : '#05080f',
+              }}
+            />
+          )}
+
+          {/* Cinematic Scene Headline Overlay */}
+          {!currentFrame.storyState?.activeTitleCard && currentFrame.storyState?.title && (
             <div className="cinematic-title-card">
               <div className="title-text">{currentFrame.storyState.title}</div>
               {currentFrame.storyState.subtitle && (
@@ -3076,7 +3138,248 @@ export default function App() {
                 ))}
               </div>
             ) : activeTab === 'story' ? (
-              <div>
+              <div className="story-editor-panel">
+                <div className="section-label">
+                  <span>Cinematic Story & Narrative Timeline</span>
+                </div>
+
+                {/* Opening & Closing Title Cards Configuration */}
+                <div className="title-cards-config-card">
+                  <h4>
+                    <span>🎬 Cinematic Title Cards</span>
+                    <button
+                      className="btn-ghost"
+                      style={{ padding: '2px 6px', fontSize: '10px' }}
+                      onClick={handleInitDefaultTitleCards}
+                      title="Reset opening and closing title cards to defaults"
+                    >
+                      ↺ Defaults
+                    </button>
+                  </h4>
+
+                  {/* Opening Title Card */}
+                  <div className="title-card-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '11px', fontWeight: 600, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={journey.timeline.titleCards?.opening?.enabled ?? true}
+                          onChange={(e) => handleUpdateTitleCards({
+                            opening: {
+                              enabled: e.target.checked,
+                              title: journey.timeline.titleCards?.opening?.title ?? journey.name,
+                              subtitle: journey.timeline.titleCards?.opening?.subtitle ?? 'From Roads to Trails, Every Journey Becomes a Story',
+                              duration: journey.timeline.titleCards?.opening?.duration ?? 3.5,
+                              motion: journey.timeline.titleCards?.opening?.motion ?? 'slow-zoom',
+                            }
+                          })}
+                        />
+                        Opening Title Card
+                      </label>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        {(journey.timeline.titleCards?.opening?.duration ?? 3.5).toFixed(1)}s
+                      </span>
+                    </div>
+
+                    {(journey.timeline.titleCards?.opening?.enabled ?? true) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <input
+                          type="text"
+                          value={journey.timeline.titleCards?.opening?.title ?? journey.name}
+                          placeholder="Opening Headline Title..."
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#fff',
+                            fontSize: '11px',
+                            padding: '3px 6px',
+                          }}
+                          onChange={(e) => handleUpdateTitleCards({
+                            opening: {
+                              ...(journey.timeline.titleCards?.opening ?? { enabled: true }),
+                              title: e.target.value,
+                              duration: journey.timeline.titleCards?.opening?.duration ?? 3.5,
+                            }
+                          })}
+                        />
+                        <input
+                          type="text"
+                          value={journey.timeline.titleCards?.opening?.subtitle ?? ''}
+                          placeholder="Opening Subtitle..."
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#cbd5e1',
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                          }}
+                          onChange={(e) => handleUpdateTitleCards({
+                            opening: {
+                              ...(journey.timeline.titleCards?.opening ?? { enabled: true, title: journey.name }),
+                              subtitle: e.target.value,
+                              duration: journey.timeline.titleCards?.opening?.duration ?? 3.5,
+                            }
+                          })}
+                        />
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '2px' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Motion:</span>
+                          <select
+                            style={{
+                              background: 'rgba(0,0,0,0.4)',
+                              color: '#fff',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: '3px',
+                              fontSize: '10px',
+                              padding: '2px 4px',
+                              flex: 1,
+                            }}
+                            value={journey.timeline.titleCards?.opening?.motion ?? 'slow-zoom'}
+                            onChange={(e) => handleUpdateTitleCards({
+                              opening: {
+                                ...(journey.timeline.titleCards?.opening ?? { enabled: true, title: journey.name }),
+                                motion: e.target.value as TitleCardMotion,
+                                duration: journey.timeline.titleCards?.opening?.duration ?? 3.5,
+                              }
+                            })}
+                          >
+                            <option value="slow-zoom">Slow Zoom (Cinematic)</option>
+                            <option value="fade">Smooth Fade</option>
+                            <option value="none">Static Cut</option>
+                          </select>
+                          <input
+                            type="range"
+                            min="1.5"
+                            max="7.0"
+                            step="0.5"
+                            value={journey.timeline.titleCards?.opening?.duration ?? 3.5}
+                            style={{ width: '75px' }}
+                            title="Opening card duration (seconds)"
+                            onChange={(e) => handleUpdateTitleCards({
+                              opening: {
+                                ...(journey.timeline.titleCards?.opening ?? { enabled: true, title: journey.name }),
+                                duration: Number(e.target.value),
+                              }
+                            })}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Closing Title Card */}
+                  <div className="title-card-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '11px', fontWeight: 600, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={journey.timeline.titleCards?.closing?.enabled ?? true}
+                          onChange={(e) => handleUpdateTitleCards({
+                            closing: {
+                              enabled: e.target.checked,
+                              title: journey.timeline.titleCards?.closing?.title ?? 'Journey Complete',
+                              subtitle: journey.timeline.titleCards?.closing?.subtitle ?? `${journey.stops.length} Stops · Created with Wayvora`,
+                              duration: journey.timeline.titleCards?.closing?.duration ?? 3.5,
+                              motion: journey.timeline.titleCards?.closing?.motion ?? 'fade',
+                            }
+                          })}
+                        />
+                        Closing Title Card
+                      </label>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        {(journey.timeline.titleCards?.closing?.duration ?? 3.5).toFixed(1)}s
+                      </span>
+                    </div>
+
+                    {(journey.timeline.titleCards?.closing?.enabled ?? true) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <input
+                          type="text"
+                          value={journey.timeline.titleCards?.closing?.title ?? 'Journey Complete'}
+                          placeholder="Closing Headline..."
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#fff',
+                            fontSize: '11px',
+                            padding: '3px 6px',
+                          }}
+                          onChange={(e) => handleUpdateTitleCards({
+                            closing: {
+                              ...(journey.timeline.titleCards?.closing ?? { enabled: true }),
+                              title: e.target.value,
+                              duration: journey.timeline.titleCards?.closing?.duration ?? 3.5,
+                            }
+                          })}
+                        />
+                        <input
+                          type="text"
+                          value={journey.timeline.titleCards?.closing?.subtitle ?? ''}
+                          placeholder="Closing Subtitle..."
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '4px',
+                            color: '#cbd5e1',
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                          }}
+                          onChange={(e) => handleUpdateTitleCards({
+                            closing: {
+                              ...(journey.timeline.titleCards?.closing ?? { enabled: true, title: 'Journey Complete' }),
+                              subtitle: e.target.value,
+                              duration: journey.timeline.titleCards?.closing?.duration ?? 3.5,
+                            }
+                          })}
+                        />
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '2px' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Motion:</span>
+                          <select
+                            style={{
+                              background: 'rgba(0,0,0,0.4)',
+                              color: '#fff',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: '3px',
+                              fontSize: '10px',
+                              padding: '2px 4px',
+                              flex: 1,
+                            }}
+                            value={journey.timeline.titleCards?.closing?.motion ?? 'fade'}
+                            onChange={(e) => handleUpdateTitleCards({
+                              closing: {
+                                ...(journey.timeline.titleCards?.closing ?? { enabled: true, title: 'Journey Complete' }),
+                                motion: e.target.value as TitleCardMotion,
+                                duration: journey.timeline.titleCards?.closing?.duration ?? 3.5,
+                              }
+                            })}
+                          >
+                            <option value="fade">Smooth Fade</option>
+                            <option value="slow-zoom">Slow Zoom</option>
+                            <option value="none">Static Cut</option>
+                          </select>
+                          <input
+                            type="range"
+                            min="1.5"
+                            max="7.0"
+                            step="0.5"
+                            value={journey.timeline.titleCards?.closing?.duration ?? 3.5}
+                            style={{ width: '75px' }}
+                            title="Closing card duration (seconds)"
+                            onChange={(e) => handleUpdateTitleCards({
+                              closing: {
+                                ...(journey.timeline.titleCards?.closing ?? { enabled: true, title: 'Journey Complete' }),
+                                duration: Number(e.target.value),
+                              }
+                            })}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
                   <button
                     className="btn-ghost"
@@ -3101,17 +3404,36 @@ export default function App() {
                     No story scenes defined yet. Click &quot;✨ AutoStory&quot; to automatically build scenes from your stops and route.
                   </div>
                 ) : (
-                  (journey.timeline.scenes as StoryScene[]).map((scene) => {
+                  (journey.timeline.scenes as StoryScene[]).map((scene, sceneIdx) => {
                     const isActive = currentFrame.storyState?.activeScene?.id === scene.id;
+                    const scenesCount = journey.timeline.scenes?.length ?? 0;
                     return (
                       <div
                         key={scene.id}
                         className={`story-scene-card ${isActive ? 'active-scene' : ''}`}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span className={`scene-intent-badge intent-${scene.intent ?? 'travel'}`}>
-                            {scene.intent ?? 'travel'}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button
+                              className="scene-reorder-btn"
+                              disabled={sceneIdx === 0}
+                              onClick={() => handleReorderStoryScene(sceneIdx, sceneIdx - 1)}
+                              title="Move scene earlier in narrative"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              className="scene-reorder-btn"
+                              disabled={sceneIdx === scenesCount - 1}
+                              onClick={() => handleReorderStoryScene(sceneIdx, sceneIdx + 1)}
+                              title="Move scene later in narrative"
+                            >
+                              ▼
+                            </button>
+                            <span className={`scene-intent-badge intent-${scene.intent ?? 'travel'}`}>
+                              {scene.intent ?? 'travel'}
+                            </span>
+                          </div>
                           <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent-cyan)' }}>
                             {formatTime(scene.startTime)} - {formatTime(scene.endTime)}
                           </span>
@@ -3184,8 +3506,149 @@ export default function App() {
                           onChange={(e) => handleUpdateStoryScene(scene.id, { caption: e.target.value })}
                         />
 
+                        {/* Scene Timing & Duration Row */}
+                        <div className="scene-timing-row">
+                          <div className="scene-timing-field">
+                            <label>Start</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={scene.startTime}
+                              onChange={(e) => {
+                                const val = Math.max(0, Number(e.target.value));
+                                const dur = Math.max(0.5, scene.endTime - scene.startTime);
+                                handleUpdateStoryScene(scene.id, { startTime: val, endTime: Math.round((val + dur) * 10) / 10 });
+                              }}
+                            />
+                          </div>
+                          <div className="scene-timing-field">
+                            <label>Duration</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0.5"
+                              value={Math.round((scene.endTime - scene.startTime) * 10) / 10}
+                              onChange={(e) => {
+                                const dur = Math.max(0.5, Number(e.target.value));
+                                handleUpdateStoryScene(scene.id, { endTime: Math.round((scene.startTime + dur) * 10) / 10 });
+                              }}
+                            />
+                          </div>
+                          <div className="scene-timing-field">
+                            <label>End</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min={scene.startTime + 0.5}
+                              value={scene.endTime}
+                              onChange={(e) => {
+                                const end = Math.max(scene.startTime + 0.5, Number(e.target.value));
+                                handleUpdateStoryScene(scene.id, { endTime: Math.round(end * 10) / 10 });
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Scene Stop and Segment Link Row */}
+                        <div className="scene-link-row">
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <label style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Link Stop</label>
+                            <select
+                              style={{
+                                background: 'rgba(0,0,0,0.4)',
+                                color: '#fff',
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: '3px',
+                                fontSize: '10px',
+                                padding: '2px 4px',
+                              }}
+                              value={scene.stopId ?? ''}
+                              onChange={(e) => handleUpdateStoryScene(scene.id, { stopId: e.target.value || undefined })}
+                            >
+                              <option value="">[None / Open Route]</option>
+                              {journey.stops.map((st, sIdx) => (
+                                <option key={st.id} value={st.id}>
+                                  Stop #{sIdx + 1}: {st.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <label style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Link Segment</label>
+                            <select
+                              style={{
+                                background: 'rgba(0,0,0,0.4)',
+                                color: '#fff',
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: '3px',
+                                fontSize: '10px',
+                                padding: '2px 4px',
+                              }}
+                              value={scene.segmentId ?? ''}
+                              onChange={(e) => handleUpdateStoryScene(scene.id, { segmentId: e.target.value || undefined })}
+                            >
+                              <option value="">[None / General]</option>
+                              {journey.segments.map((sg, gIdx) => (
+                                <option key={sg.id} value={sg.id}>
+                                  Segment #{gIdx + 1} ({sg.transportMode.toUpperCase()})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Transition Control */}
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' }}>
+                          <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Transition:</span>
+                          <select
+                            style={{
+                              background: 'rgba(0,0,0,0.4)',
+                              color: '#fff',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: '3px',
+                              fontSize: '10px',
+                              padding: '2px 4px',
+                              flex: 1,
+                            }}
+                            value={scene.transition?.type ?? 'cut'}
+                            onChange={(e) => handleUpdateStoryScene(scene.id, {
+                              transition: {
+                                type: e.target.value as TransitionType,
+                                duration: scene.transition?.duration ?? 0.8,
+                              }
+                            })}
+                          >
+                            <option value="cut">Cut (Instant)</option>
+                            <option value="crossfade">Crossfade (Atmosphere)</option>
+                            <option value="fade-black">Fade Through Black</option>
+                          </select>
+                          {scene.transition?.type && scene.transition.type !== 'cut' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <input
+                                type="range"
+                                min="0.3"
+                                max="2.5"
+                                step="0.1"
+                                value={scene.transition.duration}
+                                style={{ width: '55px' }}
+                                title={`Transition duration: ${scene.transition.duration}s`}
+                                onChange={(e) => handleUpdateStoryScene(scene.id, {
+                                  transition: {
+                                    type: scene.transition!.type,
+                                    duration: Number(e.target.value),
+                                  }
+                                })}
+                              />
+                              <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                {scene.transition.duration}s
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Controls Row: Mode & Intent */}
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' }}>
                           <select
                             value={scene.intent ?? 'travel'}
                             style={{

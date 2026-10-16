@@ -3,7 +3,7 @@
    and visual transitions from timeline time alone.
    ─────────────────────────────────────────────────────────────────── */
 
-import type { StoryScene, EvaluatedStoryState, MediaAsset, SceneIntent } from './types';
+import type { StoryScene, EvaluatedStoryState, MediaAsset, SceneIntent, StoryTitleCards, ActiveTitleCardState } from './types';
 import type { Stop, Journey, CameraMode } from '../types';
 import { DEFAULT_CAMERA_PARAMS } from '../types';
 import { computeTimelineSchedule } from '../timeline';
@@ -14,11 +14,15 @@ export interface EvaluateStoryOptions {
   titleDisplaySeconds?: number;
   /** Default transition duration in seconds (default: 0.8s) */
   defaultTransitionDuration?: number;
+  /** Optional cinematic title cards configuration */
+  titleCards?: StoryTitleCards;
+  /** Total journey duration in seconds (for closing title card evaluation) */
+  totalDuration?: number;
 }
 
 /**
  * Pure deterministic evaluator that derives active scene, titles, captions,
- * media callouts, and transitions from timeline time alone.
+ * media callouts, cinematic title cards, and transitions from timeline time alone.
  */
 export function evaluateStoryAtTime(
   scenes: StoryScene[],
@@ -30,6 +34,60 @@ export function evaluateStoryAtTime(
   const t = Math.max(0, Number.isFinite(timeSeconds) ? timeSeconds : 0);
   const titleDisplaySeconds = options.titleDisplaySeconds ?? 4.5;
 
+  // Determine active opening or closing title card (independent of whether scenes exist)
+  let activeTitleCard: ActiveTitleCardState | undefined;
+  const titleCards = options.titleCards;
+  if (titleCards) {
+    // 1. Opening Title Card
+    if (titleCards.opening?.enabled && titleCards.opening.title) {
+      const openDur = Math.max(0.5, titleCards.opening.duration || 3.5);
+      if (t >= 0 && t <= openDur) {
+        const progress = Math.min(1, Math.max(0, t / openDur));
+        const fadeWindow = Math.min(0.6, openDur * 0.25);
+        let opacity = 1;
+        if (t < fadeWindow) {
+          opacity = t / fadeWindow;
+        } else if (t > openDur - fadeWindow) {
+          opacity = Math.max(0, (openDur - t) / fadeWindow);
+        }
+        activeTitleCard = {
+          type: 'opening',
+          title: titleCards.opening.title,
+          subtitle: titleCards.opening.subtitle,
+          progress,
+          motion: titleCards.opening.motion ?? 'slow-zoom',
+          opacity: Math.max(0, Math.min(1, opacity)),
+        };
+      }
+    }
+
+    // 2. Closing Title Card (only if opening is not active)
+    if (!activeTitleCard && titleCards.closing?.enabled && titleCards.closing.title) {
+      const totalDur = options.totalDuration || (scenes && scenes.length > 0 ? scenes[scenes.length - 1].endTime : 60);
+      const closeDur = Math.max(0.5, titleCards.closing.duration || 3.5);
+      const closeStart = Math.max(0, totalDur - closeDur);
+      if (t >= closeStart && t <= totalDur) {
+        const timeIntoClose = t - closeStart;
+        const progress = Math.min(1, Math.max(0, timeIntoClose / closeDur));
+        const fadeWindow = Math.min(0.6, closeDur * 0.25);
+        let opacity = 1;
+        if (timeIntoClose < fadeWindow) {
+          opacity = timeIntoClose / fadeWindow;
+        } else if (timeIntoClose > closeDur - fadeWindow) {
+          opacity = Math.max(0, (closeDur - timeIntoClose) / fadeWindow);
+        }
+        activeTitleCard = {
+          type: 'closing',
+          title: titleCards.closing.title,
+          subtitle: titleCards.closing.subtitle,
+          progress,
+          motion: titleCards.closing.motion ?? 'fade',
+          opacity: Math.max(0, Math.min(1, opacity)),
+        };
+      }
+    }
+  }
+
   if (!scenes || scenes.length === 0) {
     const isDwelling = activeStop != null;
     return {
@@ -38,6 +96,7 @@ export function evaluateStoryAtTime(
       isStopHighlight: isDwelling,
       activeStopName: activeStop?.name,
       activeStopId: activeStop?.id,
+      activeTitleCard,
     };
   }
 
@@ -97,15 +156,17 @@ export function evaluateStoryAtTime(
   // Determine transition progress if entering a scene with transition
   let transition: EvaluatedStoryState['transition'];
   if (activeScene.transition && activeIndex > 0) {
-    const transDur = Math.max(0.1, activeScene.transition.duration);
-    if (timeIntoScene < transDur) {
-      const prevScene = sorted[activeIndex - 1];
-      transition = {
-        type: activeScene.transition.type,
-        progress: Math.min(1, Math.max(0, timeIntoScene / transDur)),
-        fromSceneId: prevScene.id,
-        toSceneId: activeScene.id,
-      };
+    if (activeScene.transition.type !== 'cut') {
+      const transDur = Math.max(0.1, activeScene.transition.duration);
+      if (timeIntoScene < transDur) {
+        const prevScene = sorted[activeIndex - 1];
+        transition = {
+          type: activeScene.transition.type,
+          progress: Math.min(1, Math.max(0, timeIntoScene / transDur)),
+          fromSceneId: prevScene.id,
+          toSceneId: activeScene.id,
+        };
+      }
     }
   }
 
@@ -127,6 +188,7 @@ export function evaluateStoryAtTime(
     isStopHighlight,
     activeStopName: matchedStop?.name,
     activeStopId: matchedStop?.id,
+    activeTitleCard,
   };
 }
 
@@ -141,10 +203,19 @@ export function validateStoryScenes(scenes: StoryScene[]): string[] {
   for (let i = 0; i < scenes.length; i++) {
     const sc = scenes[i];
     if (!sc.id) errors.push(`Scene #${i + 1} is missing an id`);
-    if (!sc.name.trim()) errors.push(`Scene #${i + 1} must have a name`);
+    if (!sc.name || !sc.name.trim()) errors.push(`Scene #${i + 1} must have a name`);
     if (sc.startTime < 0) errors.push(`Scene "${sc.name}" start time cannot be negative`);
     if (sc.endTime <= sc.startTime) {
       errors.push(`Scene "${sc.name}" end time (${sc.endTime}s) must be greater than start time (${sc.startTime}s)`);
+    }
+
+    if (sc.transition) {
+      const sceneDur = sc.endTime - sc.startTime;
+      if (sc.transition.duration < 0) {
+        errors.push(`Scene "${sc.name}" transition duration cannot be negative`);
+      } else if (sc.transition.duration > sceneDur) {
+        errors.push(`Scene "${sc.name}" transition duration (${sc.transition.duration}s) exceeds scene duration (${sceneDur}s)`);
+      }
     }
 
     // Check overlap with next scene
@@ -157,6 +228,68 @@ export function validateStoryScenes(scenes: StoryScene[]): string[] {
   }
 
   return errors;
+}
+
+/**
+ * Validates opening and closing title cards.
+ */
+export function validateTitleCards(titleCards?: StoryTitleCards): string[] {
+  const errors: string[] = [];
+  if (!titleCards) return errors;
+
+  if (titleCards.opening?.enabled) {
+    if (!titleCards.opening.title || !titleCards.opening.title.trim()) {
+      errors.push('Opening title card must have a title if enabled');
+    }
+    if ((titleCards.opening.duration ?? 0) <= 0) {
+      errors.push('Opening title card duration must be greater than 0s');
+    }
+  }
+
+  if (titleCards.closing?.enabled) {
+    if (!titleCards.closing.title || !titleCards.closing.title.trim()) {
+      errors.push('Closing title card must have a title if enabled');
+    }
+    if ((titleCards.closing.duration ?? 0) <= 0) {
+      errors.push('Closing title card duration must be greater than 0s');
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Generates default opening and closing title cards for a journey.
+ */
+export function generateDefaultTitleCards(journey: Journey): StoryTitleCards {
+  const stops = journey.stops ?? [];
+  const startStop = stops.find((s) => s.type === 'start') ?? stops[0];
+  const endStop = stops.find((s) => s.type === 'end') ?? stops[stops.length - 1];
+
+  const openingSubtitle = startStop
+    ? `Expedition beginning from ${startStop.name}`
+    : 'From Roads to Trails, Every Journey Becomes a Story';
+
+  const closingSubtitle = endStop
+    ? `Destination reached at ${endStop.name} · Created with Wayvora`
+    : `${stops.length} Stops · Created with Wayvora`;
+
+  return {
+    opening: {
+      enabled: true,
+      title: journey.name || 'Wayvora Expedition',
+      subtitle: openingSubtitle,
+      duration: 3.5,
+      motion: 'slow-zoom',
+    },
+    closing: {
+      enabled: true,
+      title: 'Journey Complete',
+      subtitle: closingSubtitle,
+      duration: 3.5,
+      motion: 'fade',
+    },
+  };
 }
 
 /**

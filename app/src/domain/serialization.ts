@@ -113,8 +113,36 @@ function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
           startTime: Math.round(startTime * 10) / 10,
           endTime: Math.round(endTime * 10) / 10,
           media: Array.isArray(sc.media) ? sc.media : [],
+          stopId: sc.stopId ? String(sc.stopId) : undefined,
+          segmentId: sc.segmentId ? String(sc.segmentId) : undefined,
+          dwellDuration: typeof sc.dwellDuration === 'number' ? sc.dwellDuration : undefined,
+          transition: sc.transition ? { type: sc.transition.type ?? 'cut', duration: Number(sc.transition.duration ?? 0.8) } : undefined,
         } as any;
       });
+    }
+
+    if (journey.timeline.titleCards && typeof journey.timeline.titleCards === 'object') {
+      const tc = journey.timeline.titleCards as any;
+      journey.timeline.titleCards = {
+        opening: tc.opening
+          ? {
+              enabled: Boolean(tc.opening.enabled),
+              title: String(tc.opening.title || ''),
+              subtitle: tc.opening.subtitle ? String(tc.opening.subtitle) : undefined,
+              duration: typeof tc.opening.duration === 'number' ? tc.opening.duration : 3.5,
+              motion: tc.opening.motion ?? 'slow-zoom',
+            }
+          : undefined,
+        closing: tc.closing
+          ? {
+              enabled: Boolean(tc.closing.enabled),
+              title: String(tc.closing.title || ''),
+              subtitle: tc.closing.subtitle ? String(tc.closing.subtitle) : undefined,
+              duration: typeof tc.closing.duration === 'number' ? tc.closing.duration : 3.5,
+              motion: tc.closing.motion ?? 'fade',
+            }
+          : undefined,
+      };
     }
 
     if (!journey.audio) {

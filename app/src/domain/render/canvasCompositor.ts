@@ -6,7 +6,7 @@
    ─────────────────────────────────────────────────────────────────── */
 
 import type { RenderFrame, SafeAreaInsets, CinematicTreatment, ColorGradePreset } from './types';
-import type { AspectRatio } from '../types';
+import type { AspectRatio, ActiveTitleCardState } from '../types';
 import {
   drawTransportMarker2D,
   resolveCanonicalTransportMode,
@@ -108,10 +108,14 @@ export function compositeRenderFrame(
     drawTransportMarker2D(ctx, frame);
   }
 
-  // 3. Draw active visual transition (fade/dissolve)
+  // 3. Draw active visual transition (fade-black / crossfade / dissolve)
   if (frame.story.transition) {
     const { type, progress } = frame.story.transition;
-    if (type === 'fade' || type === 'dissolve') {
+    if (type === 'fade-black') {
+      const alpha = Math.sin(progress * Math.PI) * 0.96;
+      ctx.fillStyle = `rgba(3, 6, 12, ${alpha.toFixed(3)})`;
+      ctx.fillRect(0, 0, width, height);
+    } else if (type === 'crossfade' || type === 'fade' || type === 'dissolve') {
       const alpha = Math.sin(progress * Math.PI) * 0.88;
       ctx.fillStyle = `rgba(5, 8, 15, ${alpha.toFixed(3)})`;
       ctx.fillRect(0, 0, width, height);
@@ -170,6 +174,11 @@ export function compositeRenderFrame(
   // 5. Draw Travelogue Caption Bar
   if (frame.story.caption) {
     drawCaptionBar(ctx, frame.story.caption, width, height, insets);
+  }
+
+  // 5b. Cinematic Opening / Closing Title Card (full-focus cinematic overlay)
+  if (frame.story.activeTitleCard) {
+    drawCinematicFullTitleCard(ctx, frame.story.activeTitleCard, width, height, insets);
   }
 
   // 6. Draw Cinematic Treatments (Vignette & Color Grading)
@@ -279,6 +288,90 @@ function drawTitleCardBox(
     const subFontSize = Math.max(12, Math.round(titleFontSize * 0.6));
     ctx.font = `500 ${subFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
     ctx.fillText(subtitle, x + cardWidth / 2, y + 92);
+  }
+
+  ctx.restore();
+}
+
+function drawCinematicFullTitleCard(
+  ctx: CanvasRenderingContext2D,
+  card: ActiveTitleCardState,
+  width: number,
+  height: number,
+  insets: SafeAreaInsets
+): void {
+  if (card.opacity <= 0.005) return;
+
+  ctx.save();
+  ctx.globalAlpha = card.opacity;
+
+  // Apply subtle deterministic motion
+  if (card.motion === 'slow-zoom') {
+    const scale = 1.0 + card.progress * 0.04;
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-width / 2, -height / 2);
+  }
+
+  // Cinematic ambient backdrop (semi-transparent vignette darkening map for high contrast)
+  const bgGrad = ctx.createRadialGradient(
+    width / 2,
+    height / 2,
+    width * 0.08,
+    width / 2,
+    height / 2,
+    width * 0.65
+  );
+  bgGrad.addColorStop(0, 'rgba(6, 10, 18, 0.72)');
+  bgGrad.addColorStop(1, 'rgba(3, 6, 12, 0.90)');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, width, height);
+
+  // Centered Glassmorphic Showcase Box
+  const cardW = Math.min(width - insets.left - insets.right, 780);
+  const cardH = card.subtitle ? 180 : 130;
+  const cardX = (width - cardW) / 2;
+  const cardY = (height - cardH) / 2;
+
+  ctx.fillStyle = 'rgba(10, 16, 28, 0.88)';
+  ctx.strokeStyle = card.type === 'opening' ? 'rgba(56, 189, 248, 0.45)' : 'rgba(245, 158, 11, 0.45)';
+  ctx.lineWidth = 1.5;
+  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 16);
+  ctx.fill();
+  ctx.stroke();
+
+  // Decorative top accent line with glow
+  const accentColor = card.type === 'opening' ? '56, 189, 248' : '245, 158, 11';
+  const accentGrad = ctx.createLinearGradient(cardX + 24, cardY, cardX + cardW - 24, cardY);
+  accentGrad.addColorStop(0, `rgba(${accentColor}, 0)`);
+  accentGrad.addColorStop(0.5, `rgba(${accentColor}, 0.95)`);
+  accentGrad.addColorStop(1, `rgba(${accentColor}, 0)`);
+  ctx.fillStyle = accentGrad;
+  ctx.fillRect(cardX + 32, cardY, cardW - 64, 2.5);
+
+  // Top Category Badge
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+
+  ctx.fillStyle = card.type === 'opening' ? '#38bdf8' : '#f59e0b';
+  ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const badgeText = card.type === 'opening' ? '◆ WAYVORA EXPEDITION' : '◆ EXPEDITION COMPLETE';
+  ctx.fillText(badgeText, width / 2, cardY + 36);
+
+  // Main Title
+  ctx.fillStyle = '#ffffff';
+  const titleFontSize = Math.min(34, Math.max(22, Math.round(cardW * 0.052)));
+  ctx.font = `700 ${titleFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+  ctx.fillText(card.title.toUpperCase(), width / 2, cardY + (card.subtitle ? 78 : 88));
+
+  // Subtitle
+  if (card.subtitle) {
+    ctx.fillStyle = '#cbd5e1';
+    const subFontSize = Math.max(13, Math.round(titleFontSize * 0.48));
+    ctx.font = `400 ${subFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    ctx.fillText(card.subtitle, width / 2, cardY + 120);
   }
 
   ctx.restore();

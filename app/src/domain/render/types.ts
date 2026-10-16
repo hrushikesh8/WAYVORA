@@ -13,6 +13,7 @@ import type {
   StoryScene,
   TransitionType,
   TransportMode,
+  ActiveTitleCardState,
 } from '../types';
 import type { EvaluatedAudioState } from '../audio/types';
 
@@ -41,6 +42,7 @@ export interface RenderStoryOverlay {
   isStopHighlight: boolean;
   activeStopName?: string;
   activeStopId?: string;
+  activeTitleCard?: ActiveTitleCardState;
 }
 
 export type MediaResourceState = 'ready' | 'loading' | 'missing' | 'error' | 'unsupported';

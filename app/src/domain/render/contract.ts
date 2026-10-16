@@ -84,6 +84,7 @@ export function evaluateRenderFrame(
       isStopHighlight: frameState.storyState.isStopHighlight,
       activeStopName: frameState.storyState.activeStopName,
       activeStopId: frameState.storyState.activeStopId,
+      activeTitleCard: frameState.storyState.activeTitleCard,
     };
   } else {
     story = {

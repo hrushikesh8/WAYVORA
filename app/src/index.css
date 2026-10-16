@@ -1678,6 +1678,173 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
+/* ─── Phase 5: Cinematic Title Cards & Transitions ─── */
+.cinematic-full-title-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(6, 10, 18, 0.72) 0%, rgba(3, 6, 12, 0.90) 100%);
+  z-index: 35;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.cinematic-full-title-card .title-card-box {
+  background: rgba(10, 16, 28, 0.88);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 16px;
+  padding: 28px 48px;
+  text-align: center;
+  max-width: 90%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.cinematic-full-title-card.opening .title-card-box {
+  border: 1px solid rgba(56, 189, 248, 0.45);
+}
+
+.cinematic-full-title-card.closing .title-card-box {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.cinematic-full-title-card .title-card-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.cinematic-full-title-card.opening .title-card-badge {
+  color: #38bdf8;
+}
+
+.cinematic-full-title-card.closing .title-card-badge {
+  color: #f59e0b;
+}
+
+.cinematic-full-title-card .title-card-headline {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: #ffffff;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.9);
+}
+
+.cinematic-full-title-card .title-card-subline {
+  font-size: 14px;
+  color: #cbd5e1;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+
+.cinematic-transition-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 34;
+  pointer-events: none;
+  transition: opacity 0.1s linear;
+}
+
+/* ─── Story Sidebar UI Controls ─── */
+.title-cards-config-card {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.title-cards-config-card h4 {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title-card-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.title-card-group:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.scene-timing-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.scene-timing-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scene-timing-field label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.scene-timing-field input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+}
+
+.scene-link-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.scene-reorder-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 1px 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.scene-reorder-btn:hover:not(:disabled) {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  background: rgba(0, 242, 254, 0.1);
+}
+
+.scene-reorder-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 
 
 

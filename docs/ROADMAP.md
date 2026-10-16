@@ -381,6 +381,37 @@
   - Strict TypeScript build passing (`tsc -b && vite build` in 599ms).
 - [x] Browser QA Verification:
   - Verified in browser with automated recording: successful autocomplete search for "Zurich", keyboard selection, map fly-to, place inspection card, "+ Add Waypoint to Journey" (stop count 11 -> 12), Undo (12 -> 11), Redo (11 -> 12), no-results message for random queries, clear search dismiss, and map style switching across all 5 styles.
+## Phase 5: Story Editor & Cinematic Narrative
+**Status**: VERIFIED & COMPLETE (2026-10-16)
+
+- [x] Multi-Scene Journey Storytelling:
+  - Added pure functional scene operations (`reorderStoryScenes`, `addStoryScene`, `updateStoryScene`, `deleteStoryScene`) in `app/src/domain/editor.ts`.
+  - Non-destructive linking of scenes to waypoints/stops (`stopId`) and route segments (`segmentId`).
+  - Stop deletion resilience: deleting a stop safely clears references without destroying scenes or shifting timeline boundaries.
+  - Deleting a scene removes only the scene without altering underlying journey coordinates, route geometry, or stops.
+- [x] Cinematic Opening and Closing Title Cards:
+  - Configurable `titleCards` (`opening` and `closing`) in `app/src/domain/story/types.ts` and `Timeline`.
+  - Editable title, optional subtitle, duration in seconds, and restrained motion (`slow-zoom`, `fade`, `none`).
+  - Pure deterministic evaluation in `evaluateStoryAtTime`: computes smooth fade-in, sustain, and fade-out opacity and motion progress based on timeline time alone.
+  - Validation (`validateTitleCards`) preventing empty titles and zero/negative durations.
+- [x] Scene Transitions & Narrative Timing:
+  - Initial transition set: `cut` (instantaneous switch, no overlay), `crossfade`, and `fade-black` (dip to black with sinusoidal curve).
+  - Validated transition durations that cannot exceed scene duration boundaries.
+  - Configurable destination dwell timing (`dwellDuration`).
+  - Synchronized with route playback and destination dwell behavior without mutating journey coordinates or timestamps.
+- [x] Preview / Export Compositor Parity:
+  - Extended render contract (`RenderStoryOverlay`) and `compositeRenderFrame` in `app/src/domain/render/canvasCompositor.ts`.
+  - Added `drawCinematicFullTitleCard` with luxury typography, dark radial vignette, gold accent line, and deterministic zoom.
+  - Added `cinematic-transition-veil` and full-frame title card overlay in DOM studio preview matching canvas compositor output frame-for-frame.
+- [x] Project Serialization & Backward Compatibility:
+  - Extended `migrateProject` to preserve `titleCards`, `stopId`, `segmentId`, `dwellDuration`, and `transition`.
+  - Legacy projects created before Phase 5 load with 100% backward compatibility and zero errors.
+- [x] Comprehensive Acceptance & Unit Tests:
+  - Added 5 new suites in `app/src/__tests__/story.test.ts` (20 total story tests) covering reordering, undo/redo, stop deletion resilience, timing validation, title card evaluation, transition sets, and export parity.
+  - Total test suite: **281 passed / 281 tests** across 21 test suites.
+  - Strict TypeScript build passing (`tsc -b && vite build` in ~743ms).
+- [x] Browser QA Verification:
+  - Verified in browser with automated recording (`story_editor_qa`): configured Opening Title Card ("Alpine Crossing" / "A Cinematic Journey", `slow-zoom`), AutoStory scene generation, scene reordering (▲/▼), scene timing adjustments, transition configuration (Fade Through Black, 1.5s), center canvas preview during timeline playback, and export studio settings.
 
 ## Non-Goals (Explicit)
 

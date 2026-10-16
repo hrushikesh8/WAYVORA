@@ -121,11 +121,35 @@ export interface MediaAsset {
 
 export type SceneIntent = 'establishing' | 'travel' | 'stop' | 'highlight' | 'arrival';
 
-export type TransitionType = 'cut' | 'fade' | 'dissolve' | 'wipe';
+export type TransitionType = 'cut' | 'crossfade' | 'fade-black' | 'fade' | 'dissolve' | 'wipe';
 
 export interface SceneTransition {
   type: TransitionType;
   duration: number; // duration in seconds
+}
+
+export type TitleCardMotion = 'none' | 'slow-zoom' | 'fade';
+
+export interface TitleCardSettings {
+  enabled: boolean;
+  title: string;
+  subtitle?: string;
+  duration: number; // duration in seconds
+  motion?: TitleCardMotion;
+}
+
+export interface StoryTitleCards {
+  opening?: TitleCardSettings;
+  closing?: TitleCardSettings;
+}
+
+export interface ActiveTitleCardState {
+  type: 'opening' | 'closing';
+  title: string;
+  subtitle?: string;
+  progress: number; // 0..1 over card duration
+  motion: TitleCardMotion;
+  opacity: number; // 0..1 smooth fade in/out
 }
 
 export type CameraMode = 'overview' | 'flyover' | 'chase' | 'ground' | 'orbit' | 'birdeye';
@@ -164,6 +188,7 @@ export interface Scene {
   segmentId?: string;
   transition?: SceneTransition;
   keyframeIds?: string[];
+  dwellDuration?: number;
 }
 
 export interface StoryScene extends Scene {
@@ -187,6 +212,7 @@ export interface EvaluatedStoryState {
   isStopHighlight: boolean;
   activeStopName?: string;
   activeStopId?: string;
+  activeTitleCard?: ActiveTitleCardState;
 }
 
 export type CameraEasing = 'linear' | 'easeInQuad' | 'easeOutQuad' | 'easeInOutQuad' | 'easeInOutCubic' | 'smoothstep';
@@ -224,6 +250,7 @@ export interface Timeline {
   keyframes?: CameraKeyframe[]; // optional cinematic keyframe track
   currentTime: number;
   stopDwell?: boolean; // enable deterministic stop dwell in playback
+  titleCards?: StoryTitleCards; // cinematic opening and closing title cards
 }
 
 

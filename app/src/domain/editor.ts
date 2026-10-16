@@ -15,6 +15,7 @@ import type {
   StopType,
   TransportMode,
   ProvenanceMetadata,
+  StoryTitleCards,
 } from './types';
 import { segmentTypeForMode, generateId } from './types';
 import { haversineDistance } from './geo';
@@ -301,9 +302,17 @@ export function deleteStop(journey: Journey, stopId: string): Journey {
     throw new EditError(`Stop not found with id: ${stopId}`);
   }
 
+  const updatedScenes = ((journey.timeline.scenes ?? []) as StoryScene[]).map((sc) =>
+    sc.stopId === stopId ? { ...sc, stopId: undefined } : sc
+  );
+
   return {
     ...journey,
     stops: journey.stops.filter((s) => s.id !== stopId),
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
     updatedAt: new Date().toISOString(),
   };
 }
@@ -663,6 +672,54 @@ export function reorderStoryScenes(
     },
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Updates opening and/or closing title card settings on the timeline.
+ */
+export function updateTitleCards(
+  journey: Journey,
+  titleCards: Partial<StoryTitleCards>
+): Journey {
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      titleCards: {
+        ...journey.timeline.titleCards,
+        ...titleCards,
+        opening: titleCards.opening
+          ? { ...(journey.timeline.titleCards?.opening ?? { enabled: true, title: journey.name }), ...titleCards.opening }
+          : journey.timeline.titleCards?.opening,
+        closing: titleCards.closing
+          ? { ...(journey.timeline.titleCards?.closing ?? { enabled: true, title: 'Journey Complete' }), ...titleCards.closing }
+          : journey.timeline.titleCards?.closing,
+      },
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Associates or clears a stop reference on a story scene.
+ */
+export function associateSceneWithStop(
+  journey: Journey,
+  sceneId: string,
+  stopId: string | null
+): Journey {
+  return updateStoryScene(journey, sceneId, { stopId: stopId ?? undefined });
+}
+
+/**
+ * Associates or clears a segment reference on a story scene.
+ */
+export function associateSceneWithSegment(
+  journey: Journey,
+  sceneId: string,
+  segmentId: string | null
+): Journey {
+  return updateStoryScene(journey, sceneId, { segmentId: segmentId ?? undefined });
 }
 
 /**

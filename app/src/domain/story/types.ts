@@ -11,4 +11,8 @@ export type {
   MediaAsset,
   StoryScene,
   EvaluatedStoryState,
+  TitleCardMotion,
+  TitleCardSettings,
+  StoryTitleCards,
+  ActiveTitleCardState,
 } from '../types';

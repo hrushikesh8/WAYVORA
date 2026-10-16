@@ -8,9 +8,11 @@ import {
 import {
   evaluateStoryAtTime,
   validateStoryScenes,
+  validateTitleCards,
   generateDefaultStoryScenes,
+  generateDefaultTitleCards,
 } from '../domain/story/evaluator';
-import type { StoryScene, MediaAsset } from '../domain/story/types';
+import type { StoryScene, MediaAsset, StoryTitleCards } from '../domain/story/types';
 import { journeyFromWaypoints } from '../domain/journey';
 import { MIXED_JOURNEY_WAYPOINTS } from './fixtures';
 import {
@@ -21,11 +23,17 @@ import {
   addStoryScene,
   updateStoryScene,
   deleteStoryScene,
+  reorderStoryScenes,
+  updateTitleCards,
+  associateSceneWithStop,
+  associateSceneWithSegment,
+  deleteStop,
   attachMediaToScene,
   attachMediaToStop,
   removeMedia,
 } from '../domain/editor';
 import { serializeProject, deserializeProject } from '../domain/serialization';
+import { evaluateRenderFrame } from '../domain/render/contract';
 
 describe('Story Domain, Media Handling & Scene Evaluator', () => {
   describe('Media Format Validation', () => {
@@ -345,6 +353,337 @@ describe('Story Domain, Media Handling & Scene Evaluator', () => {
       expect(loadedScene).toBeDefined();
       expect(loadedScene?.title).toBe('Eiger Pass');
       expect(loadedScene?.media?.[0].geoPosition?.lat).toBe(46.5);
+    });
+
+    it('migrates legacy project without titleCards with zero errors', () => {
+      let journey = journeyFromWaypoints('Legacy Story', MIXED_JOURNEY_WAYPOINTS);
+      // Strip titleCards if any
+      delete (journey.timeline as any).titleCards;
+      const json = serializeProject(journey);
+      const loaded = deserializeProject(json);
+      expect(loaded.timeline.scenes).toBeDefined();
+    });
+  });
+
+  describe('Phase 5: Multi-Scene Reordering, Linking & Deletion Resilience', () => {
+    it('reorders scenes and supports full undo/redo', () => {
+      let journey = journeyFromWaypoints('Reorder Story', MIXED_JOURNEY_WAYPOINTS);
+      journey = { ...journey, timeline: { ...journey.timeline, scenes: [] } };
+      let history = createEditorHistory(journey);
+
+      const sceneA: StoryScene = {
+        id: 'scene-alpha',
+        name: 'Scene Alpha',
+        intent: 'establishing',
+        startTime: 0,
+        endTime: 10,
+        cameraMode: 'overview',
+        params: { zoom: 10, pitch: 40, bearing: 0, rotationSpeed: 0 },
+      };
+      const sceneB: StoryScene = {
+        id: 'scene-beta',
+        name: 'Scene Beta',
+        intent: 'travel',
+        startTime: 10,
+        endTime: 20,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+      };
+
+      journey = addStoryScene(journey, sceneA);
+      journey = addStoryScene(journey, sceneB);
+      history = pushEditorHistory(history, journey);
+
+      expect((journey.timeline.scenes as StoryScene[])[0].id).toBe('scene-alpha');
+      expect((journey.timeline.scenes as StoryScene[])[1].id).toBe('scene-beta');
+
+      // Reorder: Move Beta (index 1) to index 0
+      journey = reorderStoryScenes(journey, 1, 0);
+      history = pushEditorHistory(history, journey);
+      expect((journey.timeline.scenes as StoryScene[])[0].id).toBe('scene-beta');
+      expect((journey.timeline.scenes as StoryScene[])[1].id).toBe('scene-alpha');
+
+      // Undo reorder
+      history = undoEditorHistory(history);
+      journey = history.present;
+      expect((journey.timeline.scenes as StoryScene[])[0].id).toBe('scene-alpha');
+      expect((journey.timeline.scenes as StoryScene[])[1].id).toBe('scene-beta');
+
+      // Redo reorder
+      history = redoEditorHistory(history);
+      journey = history.present;
+      expect((journey.timeline.scenes as StoryScene[])[0].id).toBe('scene-beta');
+      expect((journey.timeline.scenes as StoryScene[])[1].id).toBe('scene-alpha');
+    });
+
+    it('associates scene with stop and segment, and cleanly clears stopId when stop is deleted without deleting scene', () => {
+      let journey = journeyFromWaypoints('Link Story', MIXED_JOURNEY_WAYPOINTS);
+      const targetStop = journey.stops[1];
+      const targetSegment = journey.segments[0];
+
+      const scene: StoryScene = {
+        id: 'scene-linked',
+        name: 'Stop & Segment Scene',
+        intent: 'stop',
+        startTime: 5,
+        endTime: 15,
+        cameraMode: 'orbit',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 30 },
+      };
+      journey = addStoryScene(journey, scene);
+
+      // Associate with stop and segment
+      journey = associateSceneWithStop(journey, 'scene-linked', targetStop.id);
+      journey = associateSceneWithSegment(journey, 'scene-linked', targetSegment.id);
+
+      let sc = (journey.timeline.scenes as StoryScene[]).find((s) => s.id === 'scene-linked');
+      expect(sc?.stopId).toBe(targetStop.id);
+      expect(sc?.segmentId).toBe(targetSegment.id);
+
+      // Deleting stop cleans up stopId reference in scene, but DOES NOT delete the scene or the segment
+      journey = deleteStop(journey, targetStop.id);
+      sc = (journey.timeline.scenes as StoryScene[]).find((s) => s.id === 'scene-linked');
+      expect(sc).toBeDefined();
+      expect(sc?.stopId).toBeUndefined();
+      expect(sc?.segmentId).toBe(targetSegment.id);
+
+      // Deleting scene DOES NOT delete the journey, waypoint, or segment
+      journey = deleteStoryScene(journey, 'scene-linked');
+      expect((journey.timeline.scenes as StoryScene[]).some((s) => s.id === 'scene-linked')).toBe(false);
+      expect(journey.segments.length).toBeGreaterThanOrEqual(1);
+      expect(journey.stops.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('Phase 5: Story Timing & Title Card Validation', () => {
+    it('validates scene start time, end time, and transition duration limits', () => {
+      const invalidScenes: StoryScene[] = [
+        {
+          id: 'sc-neg',
+          name: 'Negative Start',
+          intent: 'travel',
+          startTime: -5,
+          endTime: 10,
+          cameraMode: 'chase',
+          params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+        },
+        {
+          id: 'sc-inverted',
+          name: 'Inverted Times',
+          intent: 'travel',
+          startTime: 10,
+          endTime: 8,
+          cameraMode: 'chase',
+          params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+        },
+        {
+          id: 'sc-long-trans',
+          name: 'Overly Long Transition',
+          intent: 'travel',
+          startTime: 20,
+          endTime: 22, // 2s duration
+          cameraMode: 'chase',
+          params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+          transition: { type: 'crossfade', duration: 5 }, // 5s transition > 2s scene
+        },
+      ];
+
+      const errors = validateStoryScenes(invalidScenes);
+      expect(errors.length).toBeGreaterThanOrEqual(3);
+      expect(errors.some((e) => e.includes('start time cannot be negative'))).toBe(true);
+      expect(errors.some((e) => e.includes('must be greater than start time'))).toBe(true);
+      expect(errors.some((e) => e.includes('exceeds scene duration'))).toBe(true);
+    });
+
+    it('validates title card settings for empty titles and zero/negative duration', () => {
+      const invalidTitleCards: StoryTitleCards = {
+        opening: {
+          enabled: true,
+          title: '   ', // empty
+          duration: 3.5,
+        },
+        closing: {
+          enabled: true,
+          title: 'Closing',
+          duration: 0, // invalid <= 0
+        },
+      };
+
+      const errors = validateTitleCards(invalidTitleCards);
+      expect(errors.length).toBe(2);
+      expect(errors[0]).toContain('Opening title card must have a title');
+      expect(errors[1]).toContain('Closing title card duration must be greater than 0s');
+
+      const valid = generateDefaultTitleCards(journeyFromWaypoints('Tour', MIXED_JOURNEY_WAYPOINTS));
+      expect(validateTitleCards(valid)).toEqual([]);
+
+      let journey = journeyFromWaypoints('Tour', MIXED_JOURNEY_WAYPOINTS);
+      journey = updateTitleCards(journey, valid);
+      expect(journey.timeline.titleCards?.opening?.title).toBe('Tour');
+    });
+  });
+
+  describe('Phase 5: Cinematic Opening and Closing Title Card Evaluation', () => {
+    it('evaluates opening title card with smooth fade-in, motion, and fade-out', () => {
+      const titleCards: StoryTitleCards = {
+        opening: {
+          enabled: true,
+          title: 'Alpine Odyssey',
+          subtitle: 'A high-altitude expedition',
+          duration: 4.0,
+          motion: 'slow-zoom',
+        },
+        closing: {
+          enabled: true,
+          title: 'Expedition Complete',
+          duration: 4.0,
+          motion: 'fade',
+        },
+      };
+
+      // At t = 0s (opening starts: fade in beginning)
+      const res0 = evaluateStoryAtTime([], 0, [], null, { titleCards, totalDuration: 60 });
+      expect(res0.activeTitleCard).toBeDefined();
+      expect(res0.activeTitleCard?.type).toBe('opening');
+      expect(res0.activeTitleCard?.title).toBe('Alpine Odyssey');
+      expect(res0.activeTitleCard?.progress).toBe(0);
+      expect(res0.activeTitleCard?.opacity).toBeCloseTo(0, 2);
+
+      // At t = 2s (mid-opening: full opacity 1.0, progress 0.5)
+      const resMid = evaluateStoryAtTime([], 2.0, [], null, { titleCards, totalDuration: 60 });
+      expect(resMid.activeTitleCard).toBeDefined();
+      expect(resMid.activeTitleCard?.type).toBe('opening');
+      expect(resMid.activeTitleCard?.opacity).toBe(1.0);
+      expect(resMid.activeTitleCard?.progress).toBeCloseTo(0.5, 2);
+      expect(resMid.activeTitleCard?.motion).toBe('slow-zoom');
+
+      // At t = 5s (post-opening, before closing: no title card active)
+      const res5 = evaluateStoryAtTime([], 5.0, [], null, { titleCards, totalDuration: 60 });
+      expect(res5.activeTitleCard).toBeUndefined();
+
+      // At t = 58s (mid-closing: total 60s, close duration 4s -> start at 56s, t=58s is progress 0.5)
+      const resClose = evaluateStoryAtTime([], 58.0, [], null, { titleCards, totalDuration: 60 });
+      expect(resClose.activeTitleCard).toBeDefined();
+      expect(resClose.activeTitleCard?.type).toBe('closing');
+      expect(resClose.activeTitleCard?.title).toBe('Expedition Complete');
+      expect(resClose.activeTitleCard?.progress).toBeCloseTo(0.5, 2);
+      expect(resClose.activeTitleCard?.opacity).toBe(1.0);
+    });
+  });
+
+  describe('Phase 5: Transition Set (Cut, Crossfade, Fade-Black) Evaluation', () => {
+    const scenes: StoryScene[] = [
+      {
+        id: 'sc-1',
+        name: 'Scene 1',
+        intent: 'travel',
+        startTime: 0,
+        endTime: 10,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+      },
+      {
+        id: 'sc-2',
+        name: 'Scene 2',
+        intent: 'travel',
+        startTime: 10,
+        endTime: 20,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+        transition: { type: 'crossfade', duration: 2.0 },
+      },
+      {
+        id: 'sc-3',
+        name: 'Scene 3',
+        intent: 'stop',
+        startTime: 20,
+        endTime: 30,
+        cameraMode: 'orbit',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 30 },
+        transition: { type: 'fade-black', duration: 1.0 },
+      },
+      {
+        id: 'sc-4',
+        name: 'Scene 4',
+        intent: 'travel',
+        startTime: 30,
+        endTime: 40,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+        transition: { type: 'cut', duration: 0 },
+      },
+    ];
+
+    it('evaluates crossfade transition progress smoothly', () => {
+      // Scene 2 starts at 10s with 2s crossfade. At t=11s, progress = 0.5
+      const res = evaluateStoryAtTime(scenes, 11);
+      expect(res.transition).toBeDefined();
+      expect(res.transition?.type).toBe('crossfade');
+      expect(res.transition?.progress).toBeCloseTo(0.5, 2);
+      expect(res.transition?.fromSceneId).toBe('sc-1');
+      expect(res.transition?.toSceneId).toBe('sc-2');
+    });
+
+    it('evaluates fade-black transition smoothly', () => {
+      // Scene 3 starts at 20s with 1s fade-black. At t=20.5s, progress = 0.5
+      const res = evaluateStoryAtTime(scenes, 20.5);
+      expect(res.transition).toBeDefined();
+      expect(res.transition?.type).toBe('fade-black');
+      expect(res.transition?.progress).toBeCloseTo(0.5, 2);
+    });
+
+    it('omits transition overlay for cut transition (instantaneous)', () => {
+      // Scene 4 starts at 30s with cut transition
+      const res = evaluateStoryAtTime(scenes, 30.1);
+      expect(res.transition).toBeUndefined();
+    });
+  });
+
+  describe('Phase 5: Export Parity (evaluateRenderFrame)', () => {
+    it('composes activeTitleCard and transition into RenderFrame at explicit timestamps', () => {
+      let journey = journeyFromWaypoints('Render Parity', MIXED_JOURNEY_WAYPOINTS);
+      journey.timeline.duration = 40;
+      journey.timeline.titleCards = {
+        opening: {
+          enabled: true,
+          title: 'Opening Showcase',
+          duration: 3.0,
+          motion: 'slow-zoom',
+        },
+      };
+
+      const scene1: StoryScene = {
+        id: 'sc-r1',
+        name: 'R1',
+        intent: 'travel',
+        startTime: 0,
+        endTime: 20,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+      };
+      const scene2: StoryScene = {
+        id: 'sc-r2',
+        name: 'R2',
+        intent: 'travel',
+        startTime: 20,
+        endTime: 40,
+        cameraMode: 'chase',
+        params: { zoom: 14, pitch: 60, bearing: 0, rotationSpeed: 0 },
+        transition: { type: 'fade-black', duration: 1.0 },
+      };
+      journey = addStoryScene(journey, scene1);
+      journey = addStoryScene(journey, scene2);
+
+      // Frame at t = 1.5s (mid opening title card)
+      const frameOpening = evaluateRenderFrame(journey, 1.5);
+      expect(frameOpening.story.activeTitleCard).toBeDefined();
+      expect(frameOpening.story.activeTitleCard?.title).toBe('Opening Showcase');
+      expect(frameOpening.story.activeTitleCard?.opacity).toBe(1.0);
+
+      // Frame at t = 20.5s (mid fade-black transition into Scene 2)
+      const frameTransition = evaluateRenderFrame(journey, 20.5);
+      expect(frameTransition.story.transition?.type).toBe('fade-black');
+      expect(frameTransition.story.transition?.progress).toBeCloseTo(0.5, 2);
     });
   });
 });

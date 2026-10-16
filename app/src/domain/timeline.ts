@@ -373,8 +373,13 @@ export function evaluateTimeline(
     const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
       ? evaluateCameraAtTime(journey.timeline.keyframes, t, point, bearing, activeScene?.cameraMode ?? 'chase')
       : null;
-    const storyState = journey.timeline.scenes && journey.timeline.scenes.length > 0
-      ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, null)
+    const hasScenes = journey.timeline.scenes && journey.timeline.scenes.length > 0;
+    const hasTitleCards = Boolean(journey.timeline.titleCards?.opening?.enabled || journey.timeline.titleCards?.closing?.enabled);
+    const storyState = (hasScenes || hasTitleCards)
+      ? evaluateStoryAtTime((journey.timeline.scenes ?? []) as StoryScene[], t, journey.stops, null, {
+          titleCards: journey.timeline.titleCards,
+          totalDuration: duration,
+        })
       : null;
 
     const activeSegment = journey.segments[activeSegmentIndex];
@@ -473,8 +478,13 @@ export function evaluateTimeline(
   const cameraState = journey.timeline.keyframes && journey.timeline.keyframes.length > 0
     ? evaluateCameraAtTime(journey.timeline.keyframes, t, position, bearing, activeScene?.cameraMode ?? 'chase')
     : null;
-  const storyState = journey.timeline.scenes && journey.timeline.scenes.length > 0
-    ? evaluateStoryAtTime(journey.timeline.scenes as StoryScene[], t, journey.stops, activeStop)
+  const hasScenes = journey.timeline.scenes && journey.timeline.scenes.length > 0;
+  const hasTitleCards = Boolean(journey.timeline.titleCards?.opening?.enabled || journey.timeline.titleCards?.closing?.enabled);
+  const storyState = (hasScenes || hasTitleCards)
+    ? evaluateStoryAtTime((journey.timeline.scenes ?? []) as StoryScene[], t, journey.stops, activeStop, {
+        titleCards: journey.timeline.titleCards,
+        totalDuration,
+      })
     : null;
 
   const activeSegment = journey.segments[activeSegmentIndex];
