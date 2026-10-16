@@ -148,11 +148,47 @@ function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
     if (!journey.audio) {
       journey.audio = createDefaultAudioTimeline();
     } else {
+      const rawAudio = journey.audio as any;
       journey.audio = {
-        masterVolume: typeof journey.audio.masterVolume === 'number' ? journey.audio.masterVolume : 1.0,
-        sampleRate: journey.audio.sampleRate ?? 44100,
-        channelCount: journey.audio.channelCount ?? 2,
-        tracks: Array.isArray(journey.audio.tracks) ? journey.audio.tracks : [],
+        masterVolume: typeof rawAudio.masterVolume === 'number' ? rawAudio.masterVolume : 1.0,
+        sampleRate: rawAudio.sampleRate ?? 44100,
+        channelCount: rawAudio.channelCount ?? 2,
+        ducking: rawAudio.ducking
+          ? {
+              enabled: Boolean(rawAudio.ducking.enabled),
+              attenuation: typeof rawAudio.ducking.attenuation === 'number' ? rawAudio.ducking.attenuation : 0.3,
+              attackSeconds: typeof rawAudio.ducking.attackSeconds === 'number' ? rawAudio.ducking.attackSeconds : 0.4,
+              releaseSeconds: typeof rawAudio.ducking.releaseSeconds === 'number' ? rawAudio.ducking.releaseSeconds : 0.8,
+              marginSeconds: typeof rawAudio.ducking.marginSeconds === 'number' ? rawAudio.ducking.marginSeconds : 0.2,
+            }
+          : undefined,
+        tracks: Array.isArray(rawAudio.tracks)
+          ? rawAudio.tracks.map((t: any) => ({
+              id: String(t.id || ''),
+              name: String(t.name || ''),
+              type: t.type || 'music',
+              volume: typeof t.volume === 'number' ? t.volume : 1.0,
+              muted: Boolean(t.muted),
+              clips: Array.isArray(t.clips)
+                ? t.clips.map((c: any) => ({
+                    id: String(c.id || ''),
+                    name: String(c.name || ''),
+                    type: c.type || t.type || 'music',
+                    assetUrl: String(c.assetUrl || ''),
+                    filename: c.filename ? String(c.filename) : undefined,
+                    timelineStartSeconds: typeof c.timelineStartSeconds === 'number' ? c.timelineStartSeconds : 0,
+                    sourceTrimInSeconds: typeof c.sourceTrimInSeconds === 'number' ? c.sourceTrimInSeconds : 0,
+                    durationSeconds: typeof c.durationSeconds === 'number' ? c.durationSeconds : 10,
+                    volume: typeof c.volume === 'number' ? c.volume : 1.0,
+                    fadeInSeconds: typeof c.fadeInSeconds === 'number' ? c.fadeInSeconds : 0,
+                    fadeOutSeconds: typeof c.fadeOutSeconds === 'number' ? c.fadeOutSeconds : 0,
+                    sceneId: c.sceneId ? String(c.sceneId) : undefined,
+                    muted: Boolean(c.muted),
+                    metadata: c.metadata && typeof c.metadata === 'object' ? c.metadata : undefined,
+                  }))
+                : [],
+            }))
+          : [],
       };
     }
 

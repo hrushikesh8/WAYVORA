@@ -413,6 +413,39 @@
 - [x] Browser QA Verification:
   - Verified in browser with automated recording (`story_editor_qa`): configured Opening Title Card ("Alpine Crossing" / "A Cinematic Journey", `slow-zoom`), AutoStory scene generation, scene reordering (▲/▼), scene timing adjustments, transition configuration (Fade Through Black, 1.5s), center canvas preview during timeline playback, and export studio settings.
 
+## Phase 6: Voiceover Narration & Multi-Track Audio
+**Status**: VERIFIED & COMPLETE (2026-10-16)
+
+- [x] Multi-Track Audio Model (`app/src/domain/audio/types.ts` & `app/src/domain/types.ts`):
+  - Standardized multi-track layout supporting Voiceover Narration (`voiceover`), Background Music (`music`), and Ambient Audio (`ambient`).
+  - Clip properties include stable identity, media reference (`assetUrl`), timeline start, source trim-in, duration, volume/gain, mute state, and fade-in/fade-out curves.
+  - Non-destructive dynamic track creation (`addAudioTrack`) allowing custom ambient and foley lanes.
+- [x] Clip Editing & Studio Timeline UI (`app/src/App.tsx`, `app/src/index.css`):
+  - Multi-track timeline overview lane displaying music, voiceover, and ambient clip blocks with live playhead marker.
+  - Mini waveform amplitude visualization (`audio-waveform-mini`) on each clip card.
+  - Fine adjustment nudge controls (`-1s` / `+1s`) and duration/gain/trim inputs.
+  - Nature ambience synthesis helper generating realistic forest and wind audio buffers.
+- [x] Voiceover & Story Scene Alignment:
+  - Functional scene alignment operation (`alignClipToScene`) snapping narration start to target `StoryScene.startTime` and linking `sceneId`.
+  - Non-destructive scene reordering: reordering story scenes preserves audio clips and media references without silent timeline drift.
+- [x] Automatic Music Ducking Engine (`app/src/domain/audio/mixer.ts`):
+  - Pure mathematical gain automation (`calculateDuckingGainAtTime`): smooth cosine attack/release ramps, configurable attenuation amount (default 0.30 / -10.5 dB), attack duration (0.4s), release duration (0.8s), and safety margin (0.2s).
+  - Handles overlapping narration clips, muted clips, and gap intervals deterministically without fluttering or clicks.
+  - Ducking settings configuration card in studio UI with live status indicator (`🎙️ DUCKING ACTIVE` / `🎵 DUCKING IDLE`) and real-time gain multipliers.
+- [x] WebCodecs MP4 Export Parity:
+  - Synchronized multi-track PCM mixing (`mixAudioPcm`) precomputes ducking gain envelope across the entire audio timeline.
+  - Multiplies music track PCM by ducking curve sample-accurately before mixing with voiceover and ambient tracks.
+  - WebCodecs AAC encoder encodes mixed floating-point PCM into synchronized audio stream alongside H.264 video.
+- [x] Project Serialization & Legacy Migration:
+  - Backward-compatible serialization roundtrips ducking configuration and ambient tracks cleanly.
+  - Legacy project migration adds standard 3 tracks and default ducking settings with zero data loss.
+- [x] Automated Test Suite:
+  - Added 5 new suites in `app/src/__tests__/audio.test.ts` (20 total audio tests) covering mathematical ducking curves, multi-track PCM mixing, scene alignment, undo/redo, and legacy serialization.
+  - Total test suite: **291 passed / 291 tests** across 21 test suites.
+  - Strict TypeScript build passing (`tsc -b && vite build` in ~1.02s).
+- [x] Browser QA Verification:
+  - Verified in browser with automated recording and screenshots (`phase6_audio_verification`, `phase6_audio_tab_screenshot`): multi-track timeline overview, ducking card controls, live ducking status indicator, score generation, and synchronized MP4 video export.
+
 ## Non-Goals (Explicit)
 
 - Native mobile app (browser-first)

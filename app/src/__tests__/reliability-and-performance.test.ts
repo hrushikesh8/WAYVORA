@@ -231,7 +231,7 @@ describe('Phase 10: Performance, Reliability, and Distribution Readiness', () =>
 
       const loaded = deserializeProject(JSON.stringify(legacyProject));
       expect(loaded.audio).toBeDefined();
-      expect(loaded.audio?.tracks).toHaveLength(2);
+      expect(loaded.audio?.tracks).toHaveLength(3);
       expect(loaded.timeline.scenes[0].intent).toBe('travel');
       expect(loaded.timeline.scenes[0].startTime).toBe(0);
       expect(loaded.timeline.scenes[0].endTime).toBe(40);

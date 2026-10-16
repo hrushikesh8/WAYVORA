@@ -51,6 +51,18 @@ export interface AudioTrack {
   muted: boolean;
 }
 
+export interface AudioDuckingSettings {
+  enabled: boolean;
+  /** Linear gain multiplier applied to background music during voiceover narration (0.05 to 0.9, default 0.30) */
+  attenuation: number;
+  /** Duration in seconds to ramp down music volume when narration begins (default 0.4s) */
+  attackSeconds: number;
+  /** Duration in seconds to ramp music volume back up after narration ends (default 0.8s) */
+  releaseSeconds: number;
+  /** Pre- and post-speech silence margin in seconds around narration (default 0.2s) */
+  marginSeconds: number;
+}
+
 export interface AudioTimeline {
   tracks: AudioTrack[];
   /** Master output volume (0.0 to 2.0, default 1.0) */
@@ -59,12 +71,14 @@ export interface AudioTimeline {
   sampleRate: number;
   /** Standard channel count (e.g., 2 for stereo) */
   channelCount: number;
+  /** Automatic background music ducking configuration */
+  ducking?: AudioDuckingSettings;
 }
 
 export interface ActiveAudioClipState {
   clip: AudioClip;
   trackId: string;
-  /** Instantaneous gain at this timestamp (volume * fades * track * master) */
+  /** Instantaneous gain at this timestamp (volume * fades * track * master * ducking if music) */
   currentGain: number;
   /** Playhead position within the source audio in seconds */
   sourceOffsetSeconds: number;
@@ -77,4 +91,8 @@ export interface EvaluatedAudioState {
   masterVolume: number;
   isSilent: boolean;
   timeSeconds: number;
+  /** Instantaneous ducking attenuation factor applied to background music (0.0 to 1.0) */
+  duckingGain?: number;
+  /** Whether automatic ducking is currently active at this timestamp */
+  isDucking?: boolean;
 }

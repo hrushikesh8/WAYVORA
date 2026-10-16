@@ -9,7 +9,16 @@ import type {
   AudioTimeline,
   ActiveAudioClipState,
   EvaluatedAudioState,
+  AudioDuckingSettings,
 } from './types';
+
+export const DEFAULT_DUCKING_SETTINGS: AudioDuckingSettings = {
+  enabled: true,
+  attenuation: 0.30, // -10.5 dB
+  attackSeconds: 0.4,
+  releaseSeconds: 0.8,
+  marginSeconds: 0.2,
+};
 
 /**
  * Calculates instantaneous gain for an audio clip at a specific local offset.
@@ -47,7 +56,87 @@ export function calculateClipGain(clip: AudioClip, localTimeSeconds: number): nu
 }
 
 /**
+ * Pure evaluation of automatic music ducking attenuation at an explicit timeline timestamp.
+ * Evaluates active voiceover clips across all voiceover tracks and computes a smooth cosine gain envelope.
+ * Returns a linear multiplier in [attenuation, 1.0] applied to background music tracks.
+ */
+export function calculateDuckingGainAtTime(
+  timeline: AudioTimeline | undefined,
+  timeSeconds: number
+): number {
+  if (!timeline || !timeline.ducking || !timeline.ducking.enabled) {
+    return 1.0;
+  }
+
+  const {
+    attenuation = 0.3,
+    attackSeconds = 0.4,
+    releaseSeconds = 0.8,
+    marginSeconds = 0.2,
+  } = timeline.ducking;
+
+  const voTracks = (timeline.tracks || []).filter(
+    (t) => t.type === 'voiceover' && !t.muted && (t.volume ?? 1.0) > 0
+  );
+  if (voTracks.length === 0) return 1.0;
+
+  let minGain = 1.0;
+
+  for (const track of voTracks) {
+    for (const clip of track.clips) {
+      if (clip.muted || (clip.volume ?? 1.0) <= 0 || clip.durationSeconds <= 0) continue;
+
+      const speechStart = clip.timelineStartSeconds;
+      const speechEnd = speechStart + clip.durationSeconds;
+
+      const attStart = Math.max(0, speechStart - marginSeconds - attackSeconds);
+      const attEnd = Math.max(0, speechStart - marginSeconds);
+      const relStart = speechEnd + marginSeconds;
+      const relEnd = relStart + releaseSeconds;
+
+      if (timeSeconds < attStart || timeSeconds > relEnd) {
+        continue;
+      }
+
+      let factor = 1.0;
+
+      if (timeSeconds >= attEnd && timeSeconds <= relStart) {
+        // Full ducking attenuation plateau
+        factor = attenuation;
+      } else if (timeSeconds >= attStart && timeSeconds < attEnd) {
+        // Attack phase: fade down from 1.0 to attenuation using smooth cosine easing
+        const attackDur = attEnd - attStart;
+        if (attackDur <= 0.0001) {
+          factor = attenuation;
+        } else {
+          const tau = (timeSeconds - attStart) / attackDur;
+          const curve = 0.5 * (1 - Math.cos(Math.PI * tau));
+          factor = 1.0 - (1.0 - attenuation) * curve;
+        }
+      } else if (timeSeconds > relStart && timeSeconds <= relEnd) {
+        // Release phase: fade up from attenuation to 1.0 using smooth cosine easing
+        const relDur = relEnd - relStart;
+        if (relDur <= 0.0001) {
+          factor = attenuation;
+        } else {
+          const tau = (timeSeconds - relStart) / relDur;
+          const curve = 0.5 * (1 - Math.cos(Math.PI * tau));
+          factor = attenuation + (1.0 - attenuation) * curve;
+        }
+      }
+
+      if (factor < minGain) {
+        minGain = factor;
+      }
+    }
+  }
+
+  return Math.max(0, Math.min(1.0, minGain));
+}
+
+/**
  * Pure evaluation of the active audio state at an explicit timeline timestamp.
+ * Includes ducking attenuation for background music during voiceover narration.
  */
 export function evaluateAudioTimelineAtTime(
   timeline: AudioTimeline | undefined,
@@ -59,6 +148,8 @@ export function evaluateAudioTimelineAtTime(
       masterVolume: 1.0,
       isSilent: true,
       timeSeconds,
+      duckingGain: 1.0,
+      isDucking: false,
     };
   }
 
@@ -69,14 +160,20 @@ export function evaluateAudioTimelineAtTime(
       masterVolume: 0,
       isSilent: true,
       timeSeconds,
+      duckingGain: 1.0,
+      isDucking: false,
     };
   }
 
+  const duckingGain = calculateDuckingGainAtTime(timeline, timeSeconds);
+  const isDucking = duckingGain < 0.999;
   const activeClips: ActiveAudioClipState[] = [];
 
   for (const track of timeline.tracks) {
     if (track.muted || (track.volume ?? 1.0) <= 0) continue;
     const trackVol = track.volume ?? 1.0;
+    const isMusicTrack = track.type === 'music';
+    const trackDucking = isMusicTrack ? duckingGain : 1.0;
 
     for (const clip of track.clips) {
       if (clip.muted) continue;
@@ -86,7 +183,7 @@ export function evaluateAudioTimelineAtTime(
       if (timeSeconds >= start && timeSeconds < end) {
         const localTime = timeSeconds - start;
         const clipGain = calculateClipGain(clip, localTime);
-        const effectiveGain = clipGain * trackVol * masterVol;
+        const effectiveGain = clipGain * trackVol * masterVol * trackDucking;
 
         activeClips.push({
           clip,
@@ -106,17 +203,20 @@ export function evaluateAudioTimelineAtTime(
     masterVolume: masterVol,
     isSilent,
     timeSeconds,
+    duckingGain,
+    isDucking,
   };
 }
 
 /**
- * Creates a standard AudioTimeline with default music and voiceover tracks.
+ * Creates a standard AudioTimeline with music, voiceover narration, and ambient environmental audio tracks.
  */
 export function createDefaultAudioTimeline(): AudioTimeline {
   return {
     masterVolume: 1.0,
     sampleRate: 44100,
     channelCount: 2,
+    ducking: { ...DEFAULT_DUCKING_SETTINGS },
     tracks: [
       {
         id: generateId(),
@@ -132,6 +232,14 @@ export function createDefaultAudioTimeline(): AudioTimeline {
         type: 'voiceover',
         clips: [],
         volume: 1.0,
+        muted: false,
+      },
+      {
+        id: generateId(),
+        name: 'Ambient & Environment',
+        type: 'ambient',
+        clips: [],
+        volume: 0.70,
         muted: false,
       },
     ],
@@ -172,6 +280,26 @@ export function validateAudioClip(clip: AudioClip, journeyDuration: number): str
     errors.push(`Audio clip starts after journey duration (${journeyDuration}s)`);
   }
 
+  return errors;
+}
+
+/**
+ * Validates audio ducking configuration.
+ */
+export function validateDuckingSettings(settings: AudioDuckingSettings): string[] {
+  const errors: string[] = [];
+  if (settings.attenuation < 0 || settings.attenuation > 1.0) {
+    errors.push('Ducking attenuation must be between 0.0 and 1.0');
+  }
+  if (settings.attackSeconds < 0 || settings.attackSeconds > 5.0) {
+    errors.push('Ducking attack duration must be between 0.0s and 5.0s');
+  }
+  if (settings.releaseSeconds < 0 || settings.releaseSeconds > 10.0) {
+    errors.push('Ducking release duration must be between 0.0s and 10.0s');
+  }
+  if (settings.marginSeconds < 0 || settings.marginSeconds > 5.0) {
+    errors.push('Ducking margin must be between 0.0s and 5.0s');
+  }
   return errors;
 }
 
@@ -272,7 +400,7 @@ export interface MixAudioPcmOptions {
 
 /**
  * Mixes multiple audio tracks and clips into a single stereo Float32Array PCM buffer.
- * Performs deterministic sample-accurate accumulation and soft-knee peak limiting.
+ * Performs deterministic sample-accurate accumulation, automatic background-music ducking, and soft-knee peak limiting.
  */
 export function mixAudioPcm(options: MixAudioPcmOptions): {
   leftChannel: Float32Array;
@@ -301,10 +429,21 @@ export function mixAudioPcm(options: MixAudioPcmOptions): {
     };
   }
 
+  // Precalculate ducking envelope across the entire duration for sample-accurate music attenuation
+  const duckingEnvelope = new Float32Array(totalSamples);
+  if (options.timeline.ducking?.enabled !== false && options.timeline.ducking) {
+    for (let i = 0; i < totalSamples; i++) {
+      duckingEnvelope[i] = calculateDuckingGainAtTime(options.timeline, i / sampleRate);
+    }
+  } else {
+    duckingEnvelope.fill(1.0);
+  }
+
   // Iterate over each track
   for (const track of options.timeline.tracks) {
     if (track.muted || (track.volume ?? 1.0) <= 0) continue;
     const trackVol = track.volume ?? 1.0;
+    const isMusicTrack = track.type === 'music';
 
     for (const clip of track.clips) {
       if (clip.muted || (clip.volume ?? 1.0) <= 0) continue;
@@ -334,7 +473,8 @@ export function mixAudioPcm(options: MixAudioPcmOptions): {
       for (let i = startSample; i < endSample; i++) {
         const t = i / sampleRate;
         const localTime = t - clipStart;
-        const gain = calculateClipGain(clip, localTime) * trackVol * masterVol;
+        const duckFactor = isMusicTrack ? duckingEnvelope[i] : 1.0;
+        const gain = calculateClipGain(clip, localTime) * trackVol * masterVol * duckFactor;
 
         if (gain <= 0.00001) continue;
 

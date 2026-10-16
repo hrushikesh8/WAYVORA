@@ -816,8 +816,13 @@ export function removeMedia(journey: Journey, mediaId: string): Journey {
 
 // ── Audio Timeline Operations ──
 
-import type { AudioClip } from './audio/types';
-import { createDefaultAudioTimeline, validateAudioClip } from './audio/mixer';
+import type { AudioClip, AudioTrack, AudioDuckingSettings } from './audio/types';
+import {
+  createDefaultAudioTimeline,
+  validateAudioClip,
+  DEFAULT_DUCKING_SETTINGS,
+  validateDuckingSettings,
+} from './audio/mixer';
 
 /**
  * Adds an audio clip to a designated track in the journey audio timeline.
@@ -968,6 +973,83 @@ export function setMasterAudioVolume(journey: Journey, volume: number): Journey 
     audio: {
       ...audio,
       masterVolume: Math.max(0, Math.min(2.0, volume)),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates automatic background music ducking parameters.
+ */
+export function updateAudioDucking(
+  journey: Journey,
+  updates: Partial<AudioDuckingSettings>
+): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const currentDucking = audio.ducking || { ...DEFAULT_DUCKING_SETTINGS };
+  const updatedDucking: AudioDuckingSettings = {
+    ...currentDucking,
+    ...updates,
+  };
+
+  const validationErrors = validateDuckingSettings(updatedDucking);
+  if (validationErrors.length > 0) {
+    throw new EditError(`Invalid ducking settings: ${validationErrors.join(', ')}`);
+  }
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      ducking: updatedDucking,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Aligns an audio clip (e.g. voiceover narration or ambient scene effect)
+ * to the start time of a specific StoryScene on the timeline.
+ */
+export function alignClipToScene(
+  journey: Journey,
+  clipId: string,
+  sceneId: string
+): Journey {
+  const scene = (journey.timeline.scenes || []).find((s) => s.id === sceneId);
+  if (!scene) {
+    throw new EditError(`Story scene not found with id: ${sceneId}`);
+  }
+
+  const startTime = scene.startTime ?? 0;
+  return updateAudioClip(journey, clipId, {
+    timelineStartSeconds: startTime,
+    sceneId,
+  });
+}
+
+/**
+ * Adds an audio track to the journey audio timeline.
+ */
+export function addAudioTrack(
+  journey: Journey,
+  track: Omit<AudioTrack, 'id' | 'clips'> & { id?: string }
+): Journey {
+  const audio = journey.audio ? { ...journey.audio } : createDefaultAudioTimeline();
+  const newTrack: AudioTrack = {
+    id: track.id || generateId(),
+    name: track.name || 'New Audio Track',
+    type: track.type || 'ambient',
+    clips: [],
+    volume: track.volume ?? 1.0,
+    muted: Boolean(track.muted),
+  };
+
+  return {
+    ...journey,
+    audio: {
+      ...audio,
+      tracks: [...(audio.tracks || []), newTrack],
     },
     updatedAt: new Date().toISOString(),
   };

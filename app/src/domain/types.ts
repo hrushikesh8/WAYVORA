@@ -275,8 +275,8 @@ export const DEFAULT_EXPORT_PROFILES: ExportProfile[] = [
   { name: 'Instagram Square', width: 1080, height: 1080, aspectRatio: '1:1', codec: 'h264', fps: 30, bitrate: 6 },
 ];
 
-import type { AudioTimeline } from './audio/types';
-export type { AudioTimeline };
+import type { AudioTimeline, AudioDuckingSettings } from './audio/types';
+export type { AudioTimeline, AudioDuckingSettings };
 
 // ── Journey (root aggregate) ──
 

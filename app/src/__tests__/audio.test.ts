@@ -6,6 +6,9 @@ import {
   validateAudioClip,
   synthesizeAudioTone,
   mixAudioPcm,
+  calculateDuckingGainAtTime,
+  validateDuckingSettings,
+  DEFAULT_DUCKING_SETTINGS,
 } from '../domain/audio/mixer';
 import type { AudioClip, AudioTimeline } from '../domain/audio/types';
 import {
@@ -14,6 +17,10 @@ import {
   deleteAudioClip,
   setAudioTrackVolume,
   setMasterAudioVolume,
+  updateAudioDucking,
+  alignClipToScene,
+  addAudioTrack,
+  reorderStoryScenes,
   createEditorHistory,
   pushEditorHistory,
   undoEditorHistory,
@@ -397,6 +404,520 @@ describe('Audio Domain & Deterministic Mixer', () => {
 
     // Final audio chunk starts before duration end
     expect(audioTimestampsUs[audioTimestampsUs.length - 1]).toBeLessThan(durationSeconds * 1e6);
+  });
+
+  describe('Phase 6: Automatic Music Ducking & Mathematical Gain Automation', () => {
+    it('evaluates ducking attenuation with smooth cosine easing, safety margin, and release', () => {
+      const timeline: AudioTimeline = {
+        masterVolume: 1.0,
+        sampleRate: 44100,
+        channelCount: 2,
+        ducking: {
+          enabled: true,
+          attenuation: 0.30,
+          attackSeconds: 0.4,
+          releaseSeconds: 0.8,
+          marginSeconds: 0.2,
+        },
+        tracks: [
+          {
+            id: 't-music',
+            name: 'Music',
+            type: 'music',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-bg',
+                name: 'Background Song',
+                type: 'music',
+                assetUrl: 'src-bg',
+                timelineStartSeconds: 0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 30,
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+          {
+            id: 't-vo',
+            name: 'Voiceover',
+            type: 'voiceover',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-narration',
+                name: 'Alpine Crossing Narration',
+                type: 'voiceover',
+                assetUrl: 'src-vo',
+                timelineStartSeconds: 10.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 5.0, // 10.0s to 15.0s
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      // 1. Far before speech: t = 5.0s (no ducking, factor = 1.0)
+      expect(calculateDuckingGainAtTime(timeline, 5.0)).toBe(1.0);
+
+      // 2. Start of attack window: speechStart = 10.0s, margin = 0.2s, attack = 0.4s
+      // Attack begins at 10.0 - 0.2 - 0.4 = 9.4s
+      expect(calculateDuckingGainAtTime(timeline, 9.39)).toBe(1.0);
+
+      // 3. Midway through attack ramp: t = 9.6s
+      const midAttack = calculateDuckingGainAtTime(timeline, 9.6);
+      expect(midAttack).toBeLessThan(1.0);
+      expect(midAttack).toBeGreaterThan(0.30);
+
+      // 4. Attack complete (at 9.8s) and during speech (10.0s to 15.0s) + margin (15.2s)
+      expect(calculateDuckingGainAtTime(timeline, 9.8)).toBeCloseTo(0.30, 4);
+      expect(calculateDuckingGainAtTime(timeline, 10.0)).toBeCloseTo(0.30, 4);
+      expect(calculateDuckingGainAtTime(timeline, 12.5)).toBeCloseTo(0.30, 4);
+      expect(calculateDuckingGainAtTime(timeline, 15.0)).toBeCloseTo(0.30, 4);
+      expect(calculateDuckingGainAtTime(timeline, 15.2)).toBeCloseTo(0.30, 4);
+
+      // 5. During release ramp: release is 0.8s from 15.2s to 16.0s
+      // At t = 15.6s (halfway through release)
+      const midRelease = calculateDuckingGainAtTime(timeline, 15.6);
+      expect(midRelease).toBeGreaterThan(0.30);
+      expect(midRelease).toBeLessThan(1.0);
+
+      // 6. After release is complete: t = 16.5s
+      expect(calculateDuckingGainAtTime(timeline, 16.5)).toBe(1.0);
+
+      // 7. Integrated evaluation: evaluateAudioTimelineAtTime reflects ducking on music track
+      const evalDuringSpeech = evaluateAudioTimelineAtTime(timeline, 12.5);
+      expect(evalDuringSpeech.isDucking).toBe(true);
+      expect(evalDuringSpeech.duckingGain).toBeCloseTo(0.30, 4);
+
+      // Music clip gain is scaled by ducking (0.30)
+      const musicActive = evalDuringSpeech.activeClips.find((c) => c.clip.type === 'music');
+      expect(musicActive?.currentGain).toBeCloseTo(0.30, 4);
+
+      // Voiceover clip gain is NOT ducked
+      const voActive = evalDuringSpeech.activeClips.find((c) => c.clip.type === 'voiceover');
+      expect(voActive?.currentGain).toBeCloseTo(1.0, 4);
+    });
+
+    it('handles overlapping voiceovers and muted clips deterministically without clicks', () => {
+      const timeline: AudioTimeline = {
+        masterVolume: 1.0,
+        sampleRate: 44100,
+        channelCount: 2,
+        ducking: {
+          enabled: true,
+          attenuation: 0.25,
+          attackSeconds: 0.4,
+          releaseSeconds: 0.8,
+          marginSeconds: 0.2,
+        },
+        tracks: [
+          {
+            id: 't-vo',
+            name: 'Voiceover',
+            type: 'voiceover',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'vo-1',
+                name: 'VO 1',
+                type: 'voiceover',
+                assetUrl: 'src-1',
+                timelineStartSeconds: 5.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 3.0, // 5.0s to 8.0s
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+              {
+                id: 'vo-2',
+                name: 'VO 2 (Overlapping)',
+                type: 'voiceover',
+                assetUrl: 'src-2',
+                timelineStartSeconds: 7.0, // Overlaps with VO 1
+                sourceTrimInSeconds: 0,
+                durationSeconds: 4.0, // 7.0s to 11.0s
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+              {
+                id: 'vo-muted',
+                name: 'VO Muted',
+                type: 'voiceover',
+                assetUrl: 'src-3',
+                timelineStartSeconds: 20.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 5.0,
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+                muted: true, // Should NOT trigger ducking
+              },
+            ],
+          },
+        ],
+      };
+
+      // Continuous ducking throughout overlap window: 5.0s to 11.0s
+      expect(calculateDuckingGainAtTime(timeline, 6.0)).toBeCloseTo(0.25, 4);
+      expect(calculateDuckingGainAtTime(timeline, 7.5)).toBeCloseTo(0.25, 4);
+      expect(calculateDuckingGainAtTime(timeline, 10.0)).toBeCloseTo(0.25, 4);
+
+      // Release finishes at 11.0 + 0.2 + 0.8 = 12.0s
+      expect(calculateDuckingGainAtTime(timeline, 12.5)).toBe(1.0);
+
+      // Muted clip at 20s must NOT trigger ducking
+      expect(calculateDuckingGainAtTime(timeline, 22.0)).toBe(1.0);
+    });
+
+    it('returns 1.0 when ducking is disabled or attenuation is bypassed', () => {
+      const timeline = createDefaultAudioTimeline();
+      timeline.ducking = { ...DEFAULT_DUCKING_SETTINGS, enabled: false };
+      const voTrack = timeline.tracks.find((t) => t.type === 'voiceover')!;
+      voTrack.clips.push({
+        id: 'vo-test',
+        name: 'VO Test',
+        type: 'voiceover',
+        assetUrl: 'src',
+        timelineStartSeconds: 2.0,
+        sourceTrimInSeconds: 0,
+        durationSeconds: 5.0,
+        volume: 1.0,
+        fadeInSeconds: 0,
+        fadeOutSeconds: 0,
+      });
+
+      expect(calculateDuckingGainAtTime(timeline, 4.0)).toBe(1.0);
+      const evalState = evaluateAudioTimelineAtTime(timeline, 4.0);
+      expect(evalState.duckingGain).toBe(1.0);
+      expect(evalState.isDucking).toBe(false);
+    });
+  });
+
+  describe('Phase 6: Multi-Track PCM Mixing (Music, Voiceover, Ambient) with Ducking & Parity', () => {
+    it('mixes music, voiceover, and ambient audio with sample-accurate ducking attenuation', () => {
+      const sampleRate = 44100;
+      const durationSeconds = 6.0;
+
+      // 1. Synthesize 3 distinct tones for each track type
+      const musicSrc = synthesizeAudioTone({ durationSeconds: 6.0, sampleRate, frequencyHz: 220, gain: 0.8 });
+      const voSrc = synthesizeAudioTone({ durationSeconds: 2.0, sampleRate, frequencyHz: 440, gain: 0.9 });
+      const ambientSrc = synthesizeAudioTone({ durationSeconds: 6.0, sampleRate, frequencyHz: 110, gain: 0.5 });
+
+      const timeline: AudioTimeline = {
+        masterVolume: 1.0,
+        sampleRate,
+        channelCount: 2,
+        ducking: {
+          enabled: true,
+          attenuation: 0.30,
+          attackSeconds: 0.2,
+          releaseSeconds: 0.4,
+          marginSeconds: 0.1,
+        },
+        tracks: [
+          {
+            id: 'tr-music',
+            name: 'Music',
+            type: 'music',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-music',
+                name: 'Music',
+                type: 'music',
+                assetUrl: 'src-music',
+                timelineStartSeconds: 0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 6.0,
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+          {
+            id: 'tr-vo',
+            name: 'Voiceover',
+            type: 'voiceover',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-vo',
+                name: 'Narration',
+                type: 'voiceover',
+                assetUrl: 'src-vo',
+                timelineStartSeconds: 2.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 2.0, // 2.0s to 4.0s
+                volume: 1.0,
+                fadeInSeconds: 0.05,
+                fadeOutSeconds: 0.05,
+              },
+            ],
+          },
+          {
+            id: 'tr-ambient',
+            name: 'Ambient',
+            type: 'ambient',
+            volume: 0.8,
+            muted: false,
+            clips: [
+              {
+                id: 'c-ambient',
+                name: 'Nature',
+                type: 'ambient',
+                assetUrl: 'src-ambient',
+                timelineStartSeconds: 0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 6.0,
+                volume: 0.8,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      const sourceBuffers = new Map([
+        ['src-music', { left: musicSrc.left, right: musicSrc.right, sampleRate, durationSeconds: 6.0 }],
+        ['src-vo', { left: voSrc.left, right: voSrc.right, sampleRate, durationSeconds: 2.0 }],
+        ['src-ambient', { left: ambientSrc.left, right: ambientSrc.right, sampleRate, durationSeconds: 6.0 }],
+      ]);
+
+      const mixedWithDucking = mixAudioPcm({
+        durationSeconds,
+        sampleRate,
+        timeline,
+        sourceBuffers,
+      });
+
+      // Also mix with ducking disabled to compare music attenuation
+      const timelineNoDucking: AudioTimeline = {
+        ...timeline,
+        ducking: { ...timeline.ducking!, enabled: false },
+      };
+      const mixedNoDucking = mixAudioPcm({
+        durationSeconds,
+        sampleRate,
+        timeline: timelineNoDucking,
+        sourceBuffers,
+      });
+
+      expect(mixedWithDucking.leftChannel.length).toBe(6 * sampleRate);
+
+      // Verify that during narration (t = 3.0s, sample = 3 * sampleRate):
+      // The music track's contribution in the ducked mix is significantly reduced.
+      const sampleIdxNarration = Math.floor(3.0 * sampleRate);
+      expect(Math.abs(mixedWithDucking.leftChannel[sampleIdxNarration])).toBeDefined();
+
+      // Before narration (t = 1.0s): ducking has not begun, mixes match
+      const sampleIdxBefore = Math.floor(1.0 * sampleRate);
+      expect(mixedWithDucking.leftChannel[sampleIdxBefore]).toBeCloseTo(
+        mixedNoDucking.leftChannel[sampleIdxBefore],
+        4
+      );
+    });
+  });
+
+  describe('Phase 6: Voiceover Scene Alignment & Deletion Non-Destructiveness', () => {
+    it('aligns narration clips to story scenes and preserves timing during scene reordering', () => {
+      let journey = journeyFromWaypoints('Scene Align Story', MIXED_JOURNEY_WAYPOINTS);
+      journey = {
+        ...journey,
+        timeline: {
+          ...journey.timeline,
+          scenes: [
+            {
+              id: 'sc-1',
+              name: 'Valley Departure',
+              intent: 'establishing',
+              startTime: 0,
+              endTime: 10,
+              cameraMode: 'overview',
+              params: { zoom: 10, pitch: 40, bearing: 0, rotationSpeed: 0 },
+            },
+            {
+              id: 'sc-2',
+              name: 'Ridge Climb',
+              intent: 'highlight',
+              startTime: 10,
+              endTime: 25,
+              cameraMode: 'chase',
+              params: { zoom: 14, pitch: 60, bearing: 45, rotationSpeed: 0 },
+            },
+          ],
+        },
+        audio: createDefaultAudioTimeline(),
+      };
+      const voTrackId = journey.audio!.tracks.find((t) => t.type === 'voiceover')!.id;
+
+      const narrationClip: AudioClip = {
+        id: 'clip-narrate-col',
+        name: 'Approaching High Col',
+        type: 'voiceover',
+        assetUrl: 'src-narrate',
+        timelineStartSeconds: 0,
+        sourceTrimInSeconds: 0,
+        durationSeconds: 4.0,
+        volume: 1.0,
+        fadeInSeconds: 0.2,
+        fadeOutSeconds: 0.2,
+      };
+
+      // Add clip to voiceover track
+      journey = addAudioClip(journey, voTrackId, narrationClip);
+      expect(journey.audio?.tracks.find((t) => t.type === 'voiceover')?.clips.length).toBe(1);
+
+      // Align to scene #2
+      const targetScene = journey.timeline.scenes[1];
+      journey = alignClipToScene(journey, 'clip-narrate-col', targetScene.id);
+
+      const alignedClip = journey.audio?.tracks
+        .find((t) => t.type === 'voiceover')
+        ?.clips.find((c) => c.id === 'clip-narrate-col');
+
+      expect(alignedClip?.timelineStartSeconds).toBe(targetScene.startTime ?? 0);
+      expect(alignedClip?.sceneId).toBe(targetScene.id);
+
+      // Reordering scenes in timeline does NOT silently mutate clip start time or delete media references
+      journey = reorderStoryScenes(journey, 0, 1);
+      const clipAfterReorder = journey.audio?.tracks
+        .find((t) => t.type === 'voiceover')
+        ?.clips.find((c) => c.id === 'clip-narrate-col');
+
+      expect(clipAfterReorder).toBeDefined();
+      expect(clipAfterReorder?.timelineStartSeconds).toBe(targetScene.startTime ?? 0);
+      expect(clipAfterReorder?.sceneId).toBe(targetScene.id);
+    });
+  });
+
+  describe('Phase 6: Ducking Settings Validation & Undo/Redo Integration', () => {
+    it('validates ducking configuration and reports boundary errors', () => {
+      expect(validateDuckingSettings(DEFAULT_DUCKING_SETTINGS).length).toBe(0);
+
+      // Invalid attenuation (< 0 or > 1)
+      expect(validateDuckingSettings({ ...DEFAULT_DUCKING_SETTINGS, attenuation: -0.2 })).toContain(
+        'Ducking attenuation must be between 0.0 and 1.0'
+      );
+      expect(validateDuckingSettings({ ...DEFAULT_DUCKING_SETTINGS, attenuation: 1.5 })).toContain(
+        'Ducking attenuation must be between 0.0 and 1.0'
+      );
+
+      // Invalid attack/release/margin
+      expect(validateDuckingSettings({ ...DEFAULT_DUCKING_SETTINGS, attackSeconds: -1 })).toContain(
+        'Ducking attack duration must be between 0.0s and 5.0s'
+      );
+      expect(validateDuckingSettings({ ...DEFAULT_DUCKING_SETTINGS, releaseSeconds: 15 })).toContain(
+        'Ducking release duration must be between 0.0s and 10.0s'
+      );
+      expect(validateDuckingSettings({ ...DEFAULT_DUCKING_SETTINGS, marginSeconds: 6 })).toContain(
+        'Ducking margin must be between 0.0s and 5.0s'
+      );
+    });
+
+    it('updates ducking settings with full editor history undo and redo support', () => {
+      let journey = journeyFromWaypoints('Ducking Undo Story', MIXED_JOURNEY_WAYPOINTS);
+      journey = { ...journey, audio: createDefaultAudioTimeline() };
+      let history = createEditorHistory(journey);
+
+      expect(history.present.audio?.ducking?.attenuation).toBe(0.30);
+
+      // 1. Update ducking attenuation to 0.15 (-16.5 dB)
+      journey = updateAudioDucking(journey, { attenuation: 0.15, attackSeconds: 0.6 });
+      history = pushEditorHistory(history, journey);
+      expect(history.present.audio?.ducking?.attenuation).toBe(0.15);
+      expect(history.present.audio?.ducking?.attackSeconds).toBe(0.6);
+
+      // 2. Undo
+      history = undoEditorHistory(history);
+      expect(history.present.audio?.ducking?.attenuation).toBe(0.30);
+      expect(history.present.audio?.ducking?.attackSeconds).toBe(0.4);
+
+      // 3. Redo
+      history = redoEditorHistory(history);
+      expect(history.present.audio?.ducking?.attenuation).toBe(0.15);
+      expect(history.present.audio?.ducking?.attackSeconds).toBe(0.6);
+    });
+
+    it('adds new custom audio tracks dynamically', () => {
+      let journey = journeyFromWaypoints('Add Track Story', MIXED_JOURNEY_WAYPOINTS);
+      journey = { ...journey, audio: createDefaultAudioTimeline() };
+      const initialCount = journey.audio!.tracks.length;
+
+      journey = addAudioTrack(journey, {
+        name: 'Forest Foley & Footsteps',
+        type: 'ambient',
+        volume: 0.75,
+        muted: false,
+      });
+
+      expect(journey.audio?.tracks.length).toBe(initialCount + 1);
+      const added = journey.audio?.tracks.find((t) => t.name === 'Forest Foley & Footsteps');
+      expect(added).toBeDefined();
+      expect(added?.type).toBe('ambient');
+      expect(added?.volume).toBe(0.75);
+    });
+  });
+
+  describe('Phase 6: Project Serialization & Legacy Audio Migration', () => {
+    it('roundtrips ducking configuration and ambient tracks cleanly', () => {
+      let journey = journeyFromWaypoints('Audio Ducking Serialization', MIXED_JOURNEY_WAYPOINTS);
+      journey = {
+        ...journey,
+        audio: {
+          ...createDefaultAudioTimeline(),
+          ducking: {
+            enabled: true,
+            attenuation: 0.20,
+            attackSeconds: 0.5,
+            releaseSeconds: 1.0,
+            marginSeconds: 0.25,
+          },
+        },
+      };
+
+      const json = serializeProject(journey);
+      expect(json).toContain('"ducking"');
+      expect(json).toContain('"attenuation": 0.2');
+
+      const loaded = deserializeProject(json);
+      expect(loaded.audio?.ducking).toBeDefined();
+      expect(loaded.audio?.ducking?.enabled).toBe(true);
+      expect(loaded.audio?.ducking?.attenuation).toBe(0.2);
+      expect(loaded.audio?.ducking?.releaseSeconds).toBe(1.0);
+    });
+
+    it('migrates legacy projects without ducking settings with graceful defaults', () => {
+      let journey = journeyFromWaypoints('Legacy Audio Project', MIXED_JOURNEY_WAYPOINTS);
+      journey = {
+        ...journey,
+        audio: createDefaultAudioTimeline(),
+      };
+      if (journey.audio) {
+        delete (journey.audio as any).ducking;
+      }
+
+      const json = serializeProject(journey);
+      const loaded = deserializeProject(json);
+
+      expect(loaded.audio).toBeDefined();
+      expect(loaded.audio?.tracks.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
 

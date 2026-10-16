@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Map, Marker, setWorkerUrl } from 'maplibre-gl';
+import { Map as MapLibreMap, Marker, setWorkerUrl } from 'maplibre-gl';
 import maplibreglWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -49,14 +49,19 @@ import {
   appendPlaceToJourney,
   reorderStoryScenes,
   updateTitleCards,
+  updateAudioDucking,
+  alignClipToScene,
   type EditorHistory,
 } from './domain/editor';
 import { PlaceSearch } from './components/PlaceSearch';
 import type { GeocodeResult } from './domain/geocoding';
 import {
   type AudioClip,
+  type AudioDuckingSettings,
   synthesizeAudioTone,
   pcmToWavBlob,
+  evaluateAudioTimelineAtTime,
+  DEFAULT_DUCKING_SETTINGS,
 } from './domain/audio';
 import {
   type StoryScene,
@@ -186,6 +191,10 @@ export default function App() {
   const targetTrackIdForAudio = useRef<string | null>(null);
   const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
   const [previewingClipId, setPreviewingClipId] = useState<string | null>(null);
+  const activeAudioPlayersRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const currentAudioState = useMemo(() => {
+    return evaluateAudioTimelineAtTime(journey.audio, currentTime);
+  }, [journey.audio, currentTime]);
 
   // Video Export State
   const [selectedExportProfileIndex, setSelectedExportProfileIndex] = useState(0);
@@ -263,7 +272,7 @@ export default function App() {
 
   // MapLibre references
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<Map | null>(null);
+  const mapInstanceRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
@@ -356,7 +365,7 @@ export default function App() {
     if (!mapContainerRef.current) return;
 
     const initialStyleDef = MAP_STYLES[currentMapStyleRef.current] || MAP_STYLES.cinematic;
-    const map = new Map({
+    const map = new MapLibreMap({
       container: mapContainerRef.current,
       style: initialStyleDef.styleUrlOrSpec as any,
       center: [allPoints[0]?.lng ?? 8.5417, allPoints[0]?.lat ?? 47.3769],
@@ -485,7 +494,7 @@ export default function App() {
     fitMapToBounds(map, allPoints);
   }, [allPoints]);
 
-  const fitMapToBounds = (map: Map, points: typeof allPoints) => {
+  const fitMapToBounds = (map: MapLibreMap, points: typeof allPoints) => {
     const bounds = computeBounds(points);
     if (!bounds) return;
     map.fitBounds(
@@ -724,6 +733,58 @@ export default function App() {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
   }, [isPlaying, playbackSpeed, effectiveDuration]);
+
+  // Synchronized multi-track in-browser audio playback with ducking
+  useEffect(() => {
+    const players = activeAudioPlayersRef.current;
+
+    if (!isPlaying) {
+      players.forEach((audio: HTMLAudioElement) => {
+        if (!audio.paused) audio.pause();
+      });
+      return;
+    }
+
+    const evalAudio = evaluateAudioTimelineAtTime(journey.audio, currentTime);
+    const activeClipIds = new Set(evalAudio.activeClips.map((c) => c.clip.id));
+
+    // Pause audio elements for clips that are no longer active
+    players.forEach((audio: HTMLAudioElement, clipId: string) => {
+      if (!activeClipIds.has(clipId)) {
+        if (!audio.paused) audio.pause();
+      }
+    });
+
+    // Synchronize and play active clips
+    evalAudio.activeClips.forEach(({ clip, currentGain, sourceOffsetSeconds }) => {
+      let audio = players.get(clip.id);
+      if (!audio) {
+        audio = new Audio(clip.assetUrl);
+        players.set(clip.id, audio);
+      }
+
+      audio.volume = Math.max(0, Math.min(1.0, currentGain));
+
+      // Correct clock drift greater than 0.35s
+      if (Math.abs(audio.currentTime - sourceOffsetSeconds) > 0.35) {
+        audio.currentTime = Math.max(0, sourceOffsetSeconds);
+      }
+
+      if (audio.paused && currentGain > 0.001) {
+        audio.play().catch(() => {});
+      }
+    });
+  }, [isPlaying, currentTime, journey.audio]);
+
+  // Clean up audio players on unmount
+  useEffect(() => {
+    return () => {
+      activeAudioPlayersRef.current.forEach((audio: HTMLAudioElement) => {
+        audio.pause();
+      });
+      activeAudioPlayersRef.current.clear();
+    };
+  }, []);
 
   // Timeline scrub handler
   const handleTimelineScrub = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1070,6 +1131,57 @@ export default function App() {
   const handleSetAudioTrackVolume = (trackId: string, vol: number, muted?: boolean) => {
     const updated = setAudioTrackVolume(journey, trackId, vol, muted);
     applyJourneyEdit(updated);
+  };
+
+  const handleUpdateAudioDucking = (updates: Partial<AudioDuckingSettings>) => {
+    try {
+      const updated = updateAudioDucking(journey, updates);
+      applyJourneyEdit(updated, 'Updated audio ducking settings');
+    } catch (err: unknown) {
+      console.warn('Update audio ducking error:', err);
+    }
+  };
+
+  const handleAlignClipToScene = (clipId: string, sceneId: string) => {
+    try {
+      const updated = alignClipToScene(journey, clipId, sceneId);
+      const sc = journey.timeline.scenes.find((s) => s.id === sceneId);
+      applyJourneyEdit(updated, `Aligned narration clip to ${sc?.name || 'scene'}`);
+    } catch (err: unknown) {
+      console.warn('Align clip to scene error:', err);
+    }
+  };
+
+  const handleAddSyntheticNature = (trackId: string) => {
+    const dur = Math.min(30, Math.max(10, Math.round(effectiveDuration)));
+    const synth = synthesizeAudioTone({
+      durationSeconds: dur,
+      sampleRate: 44100,
+      frequencyHz: 110,
+      style: 'ambient-chord',
+      gain: 0.4,
+    });
+    const wavBlob = pcmToWavBlob(synth.left, synth.right, 44100);
+    const blobUrl = URL.createObjectURL(wavBlob);
+    const newClip: AudioClip = {
+      id: `audio-clip-${Date.now()}`,
+      name: 'Alpine Wind & Nature',
+      type: 'ambient',
+      assetUrl: blobUrl,
+      timelineStartSeconds: 0,
+      sourceTrimInSeconds: 0,
+      durationSeconds: dur,
+      volume: 0.65,
+      fadeInSeconds: 2.0,
+      fadeOutSeconds: 2.0,
+      metadata: {
+        artist: 'WAYVORA Sound Engine',
+        title: 'Alpine Wind & Nature Ambience',
+        provenance: 'Procedural PCM Synthesis',
+      },
+    };
+    const updated = addAudioClip(journey, trackId, newClip);
+    applyJourneyEdit(updated, `Generated Nature Ambience (${dur}s)`);
   };
 
   // Video Export Profiles and Dispatchers
@@ -2261,7 +2373,7 @@ export default function App() {
             {activeTab === 'audio' && (
               <div className="audio-panel">
                 <div className="section-label">
-                  <span>Audio Timeline & Sound Director</span>
+                  <span>Audio Timeline & Multi-Track Sound Director</span>
                 </div>
 
                 {/* Master Volume */}
@@ -2282,7 +2394,191 @@ export default function App() {
                   />
                 </div>
 
-                {/* Audio Tracks */}
+                {/* Automatic Music Ducking Control Card */}
+                {(() => {
+                  const ducking = journey.audio?.ducking || DEFAULT_DUCKING_SETTINGS;
+                  const isDuckingActive = currentAudioState.isDucking;
+                  const currentDuckingPct = Math.round((currentAudioState.duckingGain ?? 1.0) * 100);
+
+                  return (
+                    <div className="ducking-card">
+                      <div className="ducking-header">
+                        <span className="ducking-title">
+                          🦆 Automatic Music Ducking
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span className={`ducking-status-pill ${isDuckingActive ? 'active' : 'idle'}`}>
+                            {isDuckingActive
+                              ? `🎙️ DUCKING ACTIVE (${currentDuckingPct}%)`
+                              : `🎵 DUCKING IDLE (${currentDuckingPct}%)`}
+                          </span>
+                          <button
+                            className="btn-ghost"
+                            style={{
+                              padding: '2px 8px',
+                              fontSize: '10px',
+                              color: ducking.enabled ? '#34d399' : 'var(--text-muted)',
+                              fontWeight: 700,
+                            }}
+                            onClick={() => handleUpdateAudioDucking({ enabled: !ducking.enabled })}
+                          >
+                            {ducking.enabled ? 'ON' : 'OFF'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {ducking.enabled && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                          {/* Attenuation Slider */}
+                          <div className="audio-slider-row">
+                            <div className="audio-slider-labels">
+                              <span>Music Level During Narration</span>
+                              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                                {Math.round(ducking.attenuation * 100)}% ({(20 * Math.log10(Math.max(0.01, ducking.attenuation))).toFixed(1)} dB)
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0.10"
+                              max="0.80"
+                              step="0.05"
+                              value={ducking.attenuation}
+                              onChange={(e) => handleUpdateAudioDucking({ attenuation: Number(e.target.value) })}
+                            />
+                          </div>
+
+                          {/* Attack, Release & Margin Grid */}
+                          <div className="audio-clip-grid">
+                            <div className="audio-input-group">
+                              <label>Attack (Fade Down)</label>
+                              <input
+                                type="number"
+                                min="0.1"
+                                max="3.0"
+                                step="0.1"
+                                value={ducking.attackSeconds}
+                                onChange={(e) => handleUpdateAudioDucking({ attackSeconds: Math.max(0.1, Number(e.target.value)) })}
+                              />
+                            </div>
+                            <div className="audio-input-group">
+                              <label>Release (Fade Up)</label>
+                              <input
+                                type="number"
+                                min="0.2"
+                                max="5.0"
+                                step="0.1"
+                                value={ducking.releaseSeconds}
+                                onChange={(e) => handleUpdateAudioDucking({ releaseSeconds: Math.max(0.2, Number(e.target.value)) })}
+                              />
+                            </div>
+                            <div className="audio-input-group">
+                              <label>Safety Margin</label>
+                              <input
+                                type="number"
+                                min="0.0"
+                                max="2.0"
+                                step="0.1"
+                                value={ducking.marginSeconds}
+                                onChange={(e) => handleUpdateAudioDucking({ marginSeconds: Math.max(0, Number(e.target.value)) })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Multi-Track Visual Timeline Lane Overview */}
+                <div className="audio-multitrack-overview">
+                  <div className="multitrack-header">
+                    <span>Multi-Track Timeline Lanes</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '9px', color: 'var(--accent-cyan)' }}>
+                      {formatTime(currentTime)} / {formatTime(effectiveDuration)}
+                    </span>
+                  </div>
+
+                  <div className="multitrack-lane-container">
+                    {/* Music Lane */}
+                    <div className="multitrack-lane">
+                      <span className="multitrack-lane-label">Music</span>
+                      {(journey.audio?.tracks || [])
+                        .filter((t) => t.type === 'music')
+                        .flatMap((t) => t.clips)
+                        .map((clip) => {
+                          const leftPct = (clip.timelineStartSeconds / Math.max(1, effectiveDuration)) * 100;
+                          const widthPct = (clip.durationSeconds / Math.max(1, effectiveDuration)) * 100;
+                          return (
+                            <div
+                              key={clip.id}
+                              className="multitrack-clip-block music"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`${clip.name} (${clip.timelineStartSeconds}s - ${clip.timelineStartSeconds + clip.durationSeconds}s)`}
+                              onClick={() => setCurrentTime(clip.timelineStartSeconds)}
+                            >
+                              {clip.name}
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Voiceover Lane */}
+                    <div className="multitrack-lane">
+                      <span className="multitrack-lane-label">Voiceover</span>
+                      {(journey.audio?.tracks || [])
+                        .filter((t) => t.type === 'voiceover')
+                        .flatMap((t) => t.clips)
+                        .map((clip) => {
+                          const leftPct = (clip.timelineStartSeconds / Math.max(1, effectiveDuration)) * 100;
+                          const widthPct = (clip.durationSeconds / Math.max(1, effectiveDuration)) * 100;
+                          return (
+                            <div
+                              key={clip.id}
+                              className="multitrack-clip-block voiceover"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`${clip.name} (${clip.timelineStartSeconds}s - ${clip.timelineStartSeconds + clip.durationSeconds}s)`}
+                              onClick={() => setCurrentTime(clip.timelineStartSeconds)}
+                            >
+                              {clip.name}
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Ambient Lane */}
+                    <div className="multitrack-lane">
+                      <span className="multitrack-lane-label">Ambient</span>
+                      {(journey.audio?.tracks || [])
+                        .filter((t) => t.type === 'ambient')
+                        .flatMap((t) => t.clips)
+                        .map((clip) => {
+                          const leftPct = (clip.timelineStartSeconds / Math.max(1, effectiveDuration)) * 100;
+                          const widthPct = (clip.durationSeconds / Math.max(1, effectiveDuration)) * 100;
+                          return (
+                            <div
+                              key={clip.id}
+                              className="multitrack-clip-block ambient"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`${clip.name} (${clip.timelineStartSeconds}s - ${clip.timelineStartSeconds + clip.durationSeconds}s)`}
+                              onClick={() => setCurrentTime(clip.timelineStartSeconds)}
+                            >
+                              {clip.name}
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Live Playhead Indicator */}
+                    <div
+                      className="multitrack-playhead"
+                      style={{
+                        left: `${(currentTime / Math.max(1, effectiveDuration)) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Audio Tracks & Clips Detail */}
                 {(!journey.audio?.tracks || journey.audio.tracks.length === 0) ? (
                   <div className="audio-empty-msg">No audio tracks available.</div>
                 ) : (
@@ -2290,7 +2586,7 @@ export default function App() {
                     <div key={track.id} className="audio-track-card">
                       <div className="audio-track-header">
                         <span className="audio-track-title">
-                          {track.type === 'music' ? '🎵' : '🎙️'} {track.name}
+                          {track.type === 'music' ? '🎵' : track.type === 'voiceover' ? '🎙️' : '🌲'} {track.name}
                         </span>
                         <div className="audio-track-controls">
                           <button
@@ -2330,6 +2626,16 @@ export default function App() {
                             ✨ Ambient Score
                           </button>
                         )}
+                        {track.type === 'ambient' && (
+                          <button
+                            className="btn-ghost"
+                            style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
+                            onClick={() => handleAddSyntheticNature(track.id)}
+                            title="Generate procedural gentle wind and nature ambience"
+                          >
+                            🌲 Nature Ambience
+                          </button>
+                        )}
                         <button
                           className="btn-ghost"
                           style={{ flex: 1, fontSize: '10px', justifyContent: 'center' }}
@@ -2346,15 +2652,22 @@ export default function App() {
                       ) : (
                         track.clips.map((clip) => {
                           const isPreviewing = previewingClipId === clip.id;
+                          const linkedScene = (journey.timeline.scenes || []).find((s) => s.id === clip.sceneId);
+
                           return (
                             <div key={clip.id} className={`audio-clip-card ${isPreviewing ? 'previewing' : ''}`}>
                               <div className="audio-clip-header">
                                 <span className="audio-clip-name" title={clip.name}>
                                   {clip.name}
                                 </span>
-                                <span className={`audio-badge ${clip.type}`}>
-                                  {clip.type}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <span className={`audio-badge ${clip.type}`}>
+                                    {clip.type}
+                                  </span>
+                                  <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                    {clip.durationSeconds.toFixed(1)}s
+                                  </span>
+                                </div>
                                 <div style={{ display: 'flex', gap: '4px' }}>
                                   <button
                                     className="btn-ghost"
@@ -2379,10 +2692,49 @@ export default function App() {
                                 </div>
                               </div>
 
+                              {/* Mini Waveform Visualization */}
+                              <div className="audio-waveform-mini">
+                                {[0.4, 0.7, 0.5, 0.9, 0.6, 0.8, 0.3, 0.75, 0.65, 0.85, 0.5, 0.4].map((h, bIdx) => (
+                                  <div
+                                    key={bIdx}
+                                    className="audio-waveform-bar"
+                                    style={{
+                                      height: `${Math.round(h * 100)}%`,
+                                      background:
+                                        clip.type === 'music'
+                                          ? '#c084fc'
+                                          : clip.type === 'voiceover'
+                                          ? '#fbbf24'
+                                          : '#2dd4bf',
+                                    }}
+                                  />
+                                ))}
+                              </div>
+
                               {/* Timeline & Trim Inputs */}
                               <div className="audio-clip-grid">
                                 <div className="audio-input-group">
-                                  <label>Start (s)</label>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <label>Start (s)</label>
+                                    <div style={{ display: 'flex', gap: '2px' }}>
+                                      <button
+                                        className="btn-ghost"
+                                        style={{ padding: '0 2px', fontSize: '8px' }}
+                                        onClick={() => handleUpdateAudioClip(clip.id, { timelineStartSeconds: Math.max(0, clip.timelineStartSeconds - 1) })}
+                                        title="Nudge back 1 second"
+                                      >
+                                        -1s
+                                      </button>
+                                      <button
+                                        className="btn-ghost"
+                                        style={{ padding: '0 2px', fontSize: '8px' }}
+                                        onClick={() => handleUpdateAudioClip(clip.id, { timelineStartSeconds: clip.timelineStartSeconds + 1 })}
+                                        title="Nudge forward 1 second"
+                                      >
+                                        +1s
+                                      </button>
+                                    </div>
+                                  </div>
                                   <input
                                     type="number"
                                     min="0"
@@ -2411,6 +2763,45 @@ export default function App() {
                                     onChange={(e) => handleUpdateAudioClip(clip.id, { durationSeconds: Math.max(0.5, Number(e.target.value)) })}
                                   />
                                 </div>
+                              </div>
+
+                              {/* Scene Alignment Row (Especially for Voiceover Narration & Ambient) */}
+                              <div className="audio-clip-align-row">
+                                <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Scene:</span>
+                                <select
+                                  style={{
+                                    flex: 1,
+                                    background: 'rgba(0, 0, 0, 0.4)',
+                                    border: '1px solid var(--border-subtle)',
+                                    borderRadius: '3px',
+                                    color: '#fff',
+                                    fontSize: '9px',
+                                    padding: '2px 4px',
+                                  }}
+                                  value={clip.sceneId || ''}
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      handleAlignClipToScene(clip.id, e.target.value);
+                                    }
+                                  }}
+                                >
+                                  <option value="">Snap to Story Scene...</option>
+                                  {(journey.timeline.scenes || []).map((sc, sIdx) => (
+                                    <option key={sc.id} value={sc.id}>
+                                      Scene {sIdx + 1}: {sc.name} ({sc.startTime ?? 0}s)
+                                    </option>
+                                  ))}
+                                </select>
+                                {linkedScene && (
+                                  <button
+                                    className="btn-ghost"
+                                    style={{ padding: '1px 5px', fontSize: '9px', color: '#f87171' }}
+                                    onClick={() => handleUpdateAudioClip(clip.id, { sceneId: undefined })}
+                                    title="Unlink from scene"
+                                  >
+                                    Unlink
+                                  </button>
+                                )}
                               </div>
 
                               {/* Volume Slider */}
