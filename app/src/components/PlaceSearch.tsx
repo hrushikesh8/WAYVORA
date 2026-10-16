@@ -238,6 +238,8 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
 
         <input
           ref={inputRef}
+          id="place-search-input"
+          data-testid="place-search-input"
           type="text"
           value={query}
           onChange={handleInputChange}
@@ -277,6 +279,8 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
         {query && !isLoading && (
           <button
             type="button"
+            id="place-search-clear"
+            data-testid="place-search-clear"
             onClick={handleClear}
             title="Clear search"
             aria-label="Clear search"
@@ -317,7 +321,11 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
           {error ? (
             <div style={{ padding: '12px 14px', fontSize: '12px', color: '#f87171' }}>
               <div style={{ fontWeight: 600, marginBottom: '2px' }}>
-                {error.code === 'RATE_LIMITED' ? '⏱ Rate Limited' : '⚠ Search Unavailable'}
+                {error.code === 'RATE_LIMITED'
+                  ? '⏱ Rate Limited'
+                  : error.code === 'TIMEOUT'
+                  ? '⏱ Search Timed Out'
+                  : '⚠ Search Unavailable'}
               </div>
               <div style={{ opacity: 0.85 }}>{error.message}</div>
             </div>
@@ -475,7 +483,20 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
                   marginTop: '4px',
                 }}
               >
-                Coordinates: {selectedPlace.lat.toFixed(5)}° N, {selectedPlace.lng.toFixed(5)}° E
+                Coordinates: {Math.abs(selectedPlace.lat).toFixed(5)}° {selectedPlace.lat >= 0 ? 'N' : 'S'}, {Math.abs(selectedPlace.lng).toFixed(5)}° {selectedPlace.lng >= 0 ? 'E' : 'W'}
+              </div>
+
+              <div
+                style={{
+                  fontSize: '10px',
+                  color: '#38bdf8',
+                  marginTop: '3px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <span>Direct manual connection (straight-line segment)</span>
               </div>
             </div>
 
@@ -504,7 +525,11 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
             <div style={{ marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
                 type="button"
+                id="add-waypoint-btn"
+                data-testid="add-waypoint-btn"
                 onClick={() => handleAddToJourney(selectedPlace)}
+                disabled={addedSuccess}
+                title="Connects this waypoint from the previous stop with a direct segment. Can be routed via OSRM in Segments tab."
                 style={{
                   flex: 1,
                   display: 'inline-flex',
@@ -519,12 +544,13 @@ export const PlaceSearch: React.FC<PlaceSearchProps> = ({
                   fontSize: '11px',
                   padding: '7px 12px',
                   borderRadius: '6px',
-                  cursor: 'pointer',
+                  cursor: addedSuccess ? 'default' : 'pointer',
                   boxShadow: '0 4px 12px rgba(0, 242, 254, 0.25)',
                   transition: 'all 0.2s ease',
+                  opacity: addedSuccess ? 0.9 : 1,
                 }}
               >
-                {addedSuccess ? '✓ Added to Journey' : '+ Add Waypoint to Journey'}
+                {addedSuccess ? '✓ Added to Journey' : '+ Add Waypoint (Direct Connection)'}
               </button>
             </div>
           )}

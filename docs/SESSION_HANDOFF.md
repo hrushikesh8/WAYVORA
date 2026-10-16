@@ -1,14 +1,37 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 4 — Place Search & Geocoding Autocomplete  
-> Date: 2026-10-15  
-> Status: Phase 4 VERIFIED · 266/266 Unit & Acceptance Tests Passing · Production Build Green · Browser QA Complete
+> Session: Phase 4.1 — Geocoding, Route Semantics & Attribution Audit  
+> Date: 2026-10-16  
+> Status: Phase 4.1 VERIFIED · 271/271 Unit & Acceptance Tests Passing · Production Build Green · Browser QA Complete
 
 ---
 
 ## 1. Executive Summary
 
-Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigorously tested, and browser-verified:
+Phase 4.1: Geocoding, Route Semantics & Attribution Audit has completed a comprehensive audit and hardening of the place-search and geocoding capabilities before moving forward to Phase 5:
+
+1. **Photon Provider Compliance & Fair-Use Diligence**:
+   - Researched official Komoot Photon documentation and maintainer usage guidelines.
+   - Clarified that `https://photon.komoot.io` is a demonstration service without formal uptime SLA or paid commercial tiers; dynamic rate limits (HTTP 429) are enforced.
+   - Hardened `PhotonGeocodingAdapter` to support configurable endpoints via constructor options or `import.meta.env.VITE_PHOTON_ENDPOINT`, enabling zero-code transitions to self-hosted Docker instances (`komoot/photon`) for enterprise deployments.
+   - Added a defensive 8000ms timeout via `AbortController` returning typed `code: 'TIMEOUT'`.
+
+2. **Route Semantics Transparency & Honest Provenance**:
+   - Traced the complete lifecycle of added waypoints from search candidates to journey mutations.
+   - Fixed coordinate formatting in `PlaceSearch.tsx` to standard geographical hemisphere notation (`N/S`, `E/W`).
+   - Added explicit provenance metadata to connecting segments created by `appendPlaceToJourney`: `{ source: 'manual-connection', connectionType: 'direct-line', geocodingProvider: 'photon' }`.
+   - Prevented misleading claims: the UI explicitly labels new connections as `"Direct manual connection (straight-line segment)"` and prompts the user that they can route via real roads/trails with OSRM in the Segments tab.
+   - Diagnostic panel transparently flags sparse 2-point connections (`[SPARSE_ROUTE]`) until routed.
+
+3. **Attribution & Video Export Integrity**:
+   - Audited OpenStreetMap, Photon, and Esri tile licensing requirements.
+   - Closed attribution gap on Esri Satellite styles: implemented `getFullExportAttribution(styleId, terrainEnabled, options)` which dynamically inspects active journey waypoints and segments. When geocoded waypoints or OSRM-routed segments are present, OSM/Photon/OSRM attribution is appended to the video watermark and map overlay even on Esri Satellite and Cinematic styles.
+
+4. **Regression Safety & Test Expansion**:
+   - Expanded `app/src/__tests__/geocoding.test.ts` to 27 unit tests covering custom endpoints, timeout aborts, direct-connection provenance, and composite video export attribution.
+   - Full test suite: **271 passed / 271 tests** across 21 test files in 1.45s.
+   - Production build: `tsc -b && vite build` passing cleanly.
+   - Browser QA: Verified search autocomplete, hemisphere coordinates, direct connection labeling, waypoint addition, undo/redo, segment inspection, and diagnostics display.
 
 1. **Provider Due Diligence & Architecture Decision (ADR-016)**:
    - Evaluated Photon (Komoot/OSM), Nominatim, OpenCage, Mapbox, and Pelias across search quality, autocomplete suitability, licensing, video-export eligibility, rate limits, and key exposure.
@@ -60,6 +83,15 @@ Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigor
 - **Photon Geocoding Adapter (`domain/geocoding/photon.ts`)**:
   - Open-source, search-as-you-type geocoding via `https://photon.komoot.io/api`.
   - Rate-limit (429) detection, service unavailable, abort handling, and network error handling.
+  - Configurable endpoint via constructor option or `VITE_PHOTON_ENDPOINT`.
+  - Configurable 8000ms timeout with typed `code: 'TIMEOUT'`.
+- **Honest Route Semantics & Provenance (`domain/editor.ts`, `components/PlaceSearch.tsx`)**:
+  - `appendPlaceToJourney` marks connecting segment with explicit provenance: `{ source: 'manual-connection', connectionType: 'direct-line', geocodingProvider: 'photon' }`.
+  - PlaceSearch UI explicitly informs user that connection is a straight line and can be routed via OSRM in Segments tab.
+  - Diagnostic warnings honestly flag sparse 2-point connections (`[SPARSE_ROUTE]`).
+- **Composite Video Export Attribution (`domain/map/styles.ts`, `domain/render/canvasCompositor.ts`)**:
+  - `getFullExportAttribution` dynamically audits journey waypoints and segments.
+  - Guarantees OpenStreetMap / Photon / OSRM credit in video export watermark and map overlay across all 5 map styles, including Esri Satellite tiles.
 - **Mock Geocoding Adapter (`domain/geocoding/mock.ts`)**:
   - Offline testing with simulated delays, query limits, and forced error injection.
 - **Coordinate Validation & Result Parsing (`domain/geocoding/`)**:
@@ -76,15 +108,15 @@ Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigor
   - `appendPlaceToJourney`: appends to start or connects from last point with manual segment.
   - Fully integrated into immutable undo/redo history (`EditorHistory`).
 - **Browser QA Verification**:
-  - Search autocomplete, keyboard selection, fly-to, place inspection card, "+ Add Waypoint to Journey", Undo, Redo, no-results display, clear button, and style toggling verified live in browser.
+  - Search autocomplete, keyboard selection, fly-to, place inspection card, "+ Add Waypoint (Direct Connection)", Undo, Redo, no-results display, clear button, and style toggling verified live in browser.
 - **Automated Test Suite**:
-  - 266 unit and acceptance tests passing across 21 test files in 1.45s.
+  - 271 unit and acceptance tests passing across 21 test files in 1.45s.
 - **Production Build**:
   - `tsc -b && vite build` passing with zero errors.
 
 ### B. IMPLEMENTED BUT NOT VERIFIED
 
-- *None.* All Phase 4 capabilities have unit test coverage and automated browser verification.
+- *None.* All Phase 4.1 audit items have unit test coverage and automated browser verification.
 
 ### C. BLOCKED
 
@@ -111,7 +143,7 @@ Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigor
  ✓ src/__tests__/road-to-trail-acceptance.test.ts (14 tests) 25ms
  ✓ src/__tests__/editor.test.ts (13 tests) 25ms
  ✓ src/__tests__/story.test.ts (10 tests) 29ms
- ✓ src/__tests__/geocoding.test.ts (22 tests) 34ms
+ ✓ src/__tests__/geocoding.test.ts (27 tests) 38ms
  ✓ src/__tests__/transport-3d.test.ts (16 tests) 68ms
  ✓ src/__tests__/diagnostics.test.ts (12 tests) 24ms
  ✓ src/__tests__/render.test.ts (15 tests) 53ms
@@ -127,7 +159,7 @@ Phase 4: Place Search & Geocoding Autocomplete has been fully implemented, rigor
  ✓ src/__tests__/reliability-and-performance.test.ts (13 tests) 321ms
 
  Test Files  21 passed (21)
-      Tests  266 passed (266)
+      Tests  271 passed (271)
    Duration  1.45s
 ```
 

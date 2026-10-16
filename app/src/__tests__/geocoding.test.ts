@@ -23,6 +23,7 @@ import {
 } from '../domain/editor';
 import { createJourney } from '../domain/journey';
 import type { Journey } from '../domain/types';
+import { getFullExportAttribution } from '../domain/map';
 
 describe('Geocoding & Place Search Domain', () => {
   describe('Coordinate Validation (isValidCoordinate)', () => {
@@ -264,6 +265,31 @@ describe('Geocoding & Place Search Domain', () => {
 
       fetchSpy.mockRestore();
     });
+
+    it('supports configurable custom endpoints and timeout parameters', () => {
+      const adapter = new PhotonGeocodingAdapter({
+        endpoint: 'https://internal-photon.wayvora.studio/api',
+        timeoutMs: 5000,
+      });
+
+      expect(adapter.getEndpoint()).toBe('https://internal-photon.wayvora.studio/api');
+    });
+
+    it('handles request timeout with TIMEOUT error code', async () => {
+      // Mock fetch to simulate a delayed response longer than timeoutMs
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(resolve, 500))
+      );
+
+      const adapter = new PhotonGeocodingAdapter({ timeoutMs: 30 });
+      const res = await adapter.search({ query: 'Chamonix' });
+
+      expect(res.success).toBe(false);
+      expect(res.error?.code).toBe('TIMEOUT');
+      expect(res.error?.message).toContain('timed out');
+
+      fetchSpy.mockRestore();
+    });
   });
 
   describe('Route Waypoint Integration (appendPlaceToJourney)', () => {
@@ -339,6 +365,12 @@ describe('Geocoding & Place Search Domain', () => {
       expect(newSeg.points[0].lng).toBe(7.7491); // connects from previous end
       expect(newSeg.points[1].lng).toBe(7.6586); // to new destination
       expect(newSeg.points[1].ele).toBe(4478);
+      expect(newSeg.sourceFormat).toBe('manual');
+      expect(newSeg.metadata?.provenance).toEqual({
+        source: 'manual-connection',
+        connectionType: 'direct-line',
+        geocodingProvider: 'photon',
+      });
 
       const newStop = updated.stops[2];
       expect(newStop.id).toBe(newStopId);
@@ -428,6 +460,44 @@ describe('Geocoding & Place Search Domain', () => {
       history = redoEditorHistory(history);
       expect(history.present.stops).toHaveLength(4);
       expect(history.present.stops[3].name).toBe('Location D');
+    });
+  });
+
+  describe('Composite Attribution for Geocoding and Routing (getFullExportAttribution)', () => {
+    it('appends OpenStreetMap via Photon when rendering geocoded places over Satellite tiles', () => {
+      const attribution = getFullExportAttribution('satellite', true, {
+        includeGeocoding: true,
+        includeRouting: false,
+      });
+
+      expect(attribution).toContain('Esri');
+      expect(attribution).toContain('AWS Open Data');
+      expect(attribution).toContain('Geocoding © OpenStreetMap contributors via Photon');
+    });
+
+    it('appends OpenStreetMap routing when rendering OSRM routes over Satellite tiles', () => {
+      const attribution = getFullExportAttribution('satellite', true, {
+        includeGeocoding: false,
+        includeRouting: true,
+      });
+
+      expect(attribution).toContain('Esri');
+      expect(attribution).toContain('Routing data © OpenStreetMap contributors (ODbL)');
+    });
+
+    it('avoids duplicating OpenStreetMap on vector styles that already include it', () => {
+      const attribution = getFullExportAttribution('cinematic', true, {
+        includeGeocoding: true,
+        includeRouting: true,
+      });
+
+      expect(attribution).toContain('OpenFreeMap');
+      expect(attribution).toContain('Map data © OpenStreetMap contributors');
+      expect(attribution).toContain('Geocoding via Photon');
+      expect(attribution).toContain('Routing via OSRM');
+      // Verify that "OpenStreetMap contributors" appears only once as base attribution
+      const occurrences = (attribution.match(/OpenStreetMap contributors/g) || []).length;
+      expect(occurrences).toBe(1);
     });
   });
 });

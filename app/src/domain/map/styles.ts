@@ -197,3 +197,48 @@ export function getStyleAttribution(styleId: MapStyleId, terrainEnabled: boolean
   }
   return styleDef.attribution;
 }
+
+export interface AdditionalAttributionOptions {
+  includeGeocoding?: boolean;
+  includeRouting?: boolean;
+}
+
+/**
+ * Returns complete composite legal attribution combining active map style,
+ * 3D elevation terrain, and data provenance (geocoding and road routing).
+ * Guarantees that OpenStreetMap / Photon data used in waypoints or routes
+ * is properly credited in exports, even when rendering over Esri satellite tiles.
+ */
+export function getFullExportAttribution(
+  styleId: MapStyleId,
+  terrainEnabled: boolean = true,
+  options?: AdditionalAttributionOptions
+): string {
+  let text = getStyleAttribution(styleId, terrainEnabled);
+  const parts: string[] = [];
+
+  const mentionsOsm = text.includes('OpenStreetMap');
+
+  if (options?.includeGeocoding) {
+    if (!mentionsOsm) {
+      parts.push('Geocoding © OpenStreetMap contributors via Photon');
+    } else {
+      parts.push('Geocoding via Photon');
+    }
+  }
+
+  if (options?.includeRouting) {
+    if (!mentionsOsm && !options?.includeGeocoding) {
+      parts.push('Routing data © OpenStreetMap contributors (ODbL)');
+    } else {
+      parts.push('Routing via OSRM');
+    }
+  }
+
+  if (parts.length > 0) {
+    text += ` | ${parts.join(' | ')}`;
+  }
+
+  return text;
+}
+

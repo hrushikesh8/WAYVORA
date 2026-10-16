@@ -100,7 +100,7 @@ import {
   MAP_STYLE_IDS,
   DEFAULT_MAP_STYLE_ID,
   type MapStyleId,
-  getStyleAttribution,
+  getFullExportAttribution,
   attachJourneyMapLayers,
   syncRouteSourceData,
   syncSegmentPointsData,
@@ -1047,8 +1047,19 @@ export default function App() {
   };
 
   // Video Export Profiles and Dispatchers
+  const fullActiveAttribution = useMemo(() => {
+    const hasGeocodedStops = journey.segments.some((s) => {
+      const prov = s.metadata?.provenance;
+      return typeof prov === 'object' && prov !== null && prov.source === 'manual-connection';
+    });
+    const hasRoutedSegments = journey.segments.some((s) => s.sourceFormat === 'osrm');
+    return getFullExportAttribution(currentMapStyle, isTerrain3dEnabled, {
+      includeGeocoding: hasGeocodedStops,
+      includeRouting: hasRoutedSegments,
+    });
+  }, [journey, currentMapStyle, isTerrain3dEnabled]);
+
   const exportProfiles: ExportJobConfig[] = useMemo(() => {
-    const activeAttribution = getStyleAttribution(currentMapStyle, isTerrain3dEnabled);
     return [
       {
         profileName: 'YouTube 1080p',
@@ -1064,7 +1075,7 @@ export default function App() {
           contrastBoost: 0.15,
         },
         drawSafeAreaGuides: exportSafeGuides,
-        attributionText: activeAttribution,
+        attributionText: fullActiveAttribution,
       },
       {
         profileName: 'TikTok / Reels 9:16',
@@ -1080,7 +1091,7 @@ export default function App() {
           contrastBoost: 0.20,
         },
         drawSafeAreaGuides: exportSafeGuides,
-        attributionText: activeAttribution,
+        attributionText: fullActiveAttribution,
       },
       {
         profileName: 'Instagram Square 1:1',
@@ -1096,7 +1107,7 @@ export default function App() {
           contrastBoost: 0.15,
         },
         drawSafeAreaGuides: exportSafeGuides,
-        attributionText: activeAttribution,
+        attributionText: fullActiveAttribution,
       },
       {
         profileName: 'Fast Draft 720p',
@@ -1112,10 +1123,10 @@ export default function App() {
           contrastBoost: 0.10,
         },
         drawSafeAreaGuides: exportSafeGuides,
-        attributionText: activeAttribution,
+        attributionText: fullActiveAttribution,
       },
     ];
-  }, [exportFps, exportVignette, exportColorGrade, exportSafeGuides, currentMapStyle, isTerrain3dEnabled]);
+  }, [exportFps, exportVignette, exportColorGrade, exportSafeGuides, fullActiveAttribution]);
 
   const handleApplyTemplate = (templateId: JourneyTemplateId) => {
     const template = JOURNEY_TEMPLATES.find((t) => t.id === templateId);
@@ -2913,8 +2924,8 @@ export default function App() {
           )}
 
           {/* Map Attribution Notice */}
-          <div className="map-attribution-overlay" title={getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}>
-            {getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}
+          <div className="map-attribution-overlay" title={fullActiveAttribution}>
+            {fullActiveAttribution}
           </div>
         </div>
 
@@ -3367,7 +3378,7 @@ export default function App() {
               </div>
             )}
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4' }}>
-              <strong style={{ color: 'var(--text-secondary)' }}>Attribution:</strong> {getStyleAttribution(currentMapStyle, isTerrain3dEnabled)}
+              <strong style={{ color: 'var(--text-secondary)' }}>Attribution:</strong> {fullActiveAttribution}
             </div>
           </div>
 

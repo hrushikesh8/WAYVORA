@@ -84,9 +84,22 @@ export class PhotonGeocodingAdapter implements GeocodingAdapter {
   readonly attribution = PHOTON_ATTRIBUTION;
 
   private endpoint: string;
+  private timeoutMs: number;
 
-  constructor(options?: { endpoint?: string }) {
-    this.endpoint = options?.endpoint || PHOTON_DEFAULT_ENDPOINT;
+  constructor(options?: { endpoint?: string; timeoutMs?: number }) {
+    const envEndpoint =
+      typeof import.meta !== 'undefined' &&
+      typeof import.meta.env === 'object' &&
+      import.meta.env?.VITE_PHOTON_ENDPOINT;
+
+    this.endpoint =
+      options?.endpoint ||
+      (typeof envEndpoint === 'string' && envEndpoint.trim() ? envEndpoint.trim() : PHOTON_DEFAULT_ENDPOINT);
+    this.timeoutMs = options?.timeoutMs ?? 8000;
+  }
+
+  getEndpoint(): string {
+    return this.endpoint;
   }
 
   async search(query: GeocodeQuery): Promise<GeocodeResponse> {
@@ -119,13 +132,44 @@ export class PhotonGeocodingAdapter implements GeocodingAdapter {
       url.searchParams.set('lat', query.lat!.toString());
     }
 
+    const internalController = new AbortController();
+    let isTimeout = false;
+    const timeoutTimer = setTimeout(() => {
+      isTimeout = true;
+      internalController.abort();
+    }, this.timeoutMs);
+
+    if (query.signal) {
+      if (query.signal.aborted) {
+        clearTimeout(timeoutTimer);
+        return {
+          success: false,
+          results: [],
+          query: trimmed,
+          attribution: this.attribution,
+          retrievedAt,
+          error: {
+            code: 'ABORTED',
+            message: 'Geocoding request was cancelled.',
+          },
+        };
+      }
+      query.signal.addEventListener(
+        'abort',
+        () => {
+          internalController.abort();
+        },
+        { once: true }
+      );
+    }
+
     try {
       const response = await fetch(url.toString(), {
         method: 'GET',
         headers: {
           Accept: 'application/json',
         },
-        signal: query.signal,
+        signal: internalController.signal,
       });
 
       if (!response.ok) {
@@ -219,7 +263,21 @@ export class PhotonGeocodingAdapter implements GeocodingAdapter {
         retrievedAt,
       };
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
+      if (isTimeout) {
+        return {
+          success: false,
+          results: [],
+          query: trimmed,
+          attribution: this.attribution,
+          retrievedAt,
+          error: {
+            code: 'TIMEOUT',
+            message: `Geocoding request timed out after ${this.timeoutMs}ms.`,
+          },
+        };
+      }
+
+      if (query.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
         return {
           success: false,
           results: [],
@@ -244,6 +302,8 @@ export class PhotonGeocodingAdapter implements GeocodingAdapter {
           message: err instanceof Error ? err.message : 'Network request failed',
         },
       };
+    } finally {
+      clearTimeout(timeoutTimer);
     }
   }
 }

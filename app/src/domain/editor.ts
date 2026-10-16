@@ -986,6 +986,11 @@ export function appendPlaceToJourney(
     metadata: {
       isModified: true,
       lastModifiedAt: new Date().toISOString(),
+      provenance: {
+        source: 'manual-connection',
+        connectionType: 'direct-line',
+        geocodingProvider: 'photon',
+      },
     },
   };
 
