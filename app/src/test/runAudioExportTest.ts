@@ -53,7 +53,32 @@ export async function runDeterministicAudioExport(): Promise<{
     title: 'Alps Summit Marker',
     geoPosition: { lng: 7.97, lat: 46.545, ele: 2240 },
   };
-  journey.mediaLibrary = [photoAsset];
+
+  let videoBlobUrl = '';
+  try {
+    const vidResp = await fetch('/api/test-fixture-video');
+    if (vidResp.ok) {
+      const vidBlob = await vidResp.blob();
+      videoBlobUrl = URL.createObjectURL(vidBlob);
+      console.log('[E2E Video Export] Loaded real test fixture video blob:', vidBlob.size, 'bytes');
+    }
+  } catch (err) {
+    console.warn('[E2E Video Export] Could not fetch video fixture:', err);
+  }
+
+  const videoAsset = {
+    id: 'asset-test-video',
+    type: 'video' as const,
+    filename: 'ridge_traverse_action.mp4',
+    url: videoBlobUrl,
+    title: 'Ridge Action Footage',
+    durationSeconds: 2.0,
+    width: 320,
+    height: 240,
+    geoPosition: { lng: 7.935, lat: 46.57, ele: 915 },
+  };
+
+  journey.mediaLibrary = [photoAsset, videoAsset];
 
   // 2. Story Scenes & Title Cards
   const scenes: StoryScene[] = [
@@ -81,6 +106,7 @@ export async function runDeterministicAudioExport(): Promise<{
       title: 'Climbing to the Summit',
       subtitle: 'Approaching the rocky ridges',
       transition: { type: 'crossfade', duration: 0.8 },
+      media: [videoAsset],
     },
   ];
 
@@ -278,7 +304,7 @@ export async function runDeterministicAudioExport(): Promise<{
   // 6. POST the real MP4 blob to the dev server sink
   if (statusEl) statusEl.innerText = 'Saving MP4 artifact to disk...';
 
-  const targetFilename = 'phase6_e2e_audio_export.mp4';
+  const targetFilename = 'phase8_e2e_video_export.mp4';
   const saveResp = await fetch('/api/save-test-export', {
     method: 'POST',
     headers: {

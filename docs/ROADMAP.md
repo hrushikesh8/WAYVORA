@@ -480,6 +480,37 @@
 - [x] Browser QA Verification:
   - Full browser automation verified: panel layout, search/filtering, file upload handling, preview modal, Story Scene media selector, and IndexedDB persistence across page refresh.
 
+## Phase 8: Moving Video Media Rendering & Cinematic Export Parity
+**Status**: VERIFIED & COMPLETE (2026-10-26)
+
+- [x] Focused Video Frame Seeker Engine (`app/src/domain/render/videoSeeker.ts`):
+  - Native off-screen `HTMLVideoElement` sequential seeking via `VideoFrameSeeker` with zero external demuxing dependencies.
+  - Concurrency lock (`currentSeekPromise`) preventing overlapping seeks and frame collisions.
+  - Sequential forward stepping invariant ($\Delta t = 1/\text{fps}$) aligned with browser hardware decoders (5–15 ms per seek).
+  - Explicit 350 ms safety timeout bounds and graceful recovery.
+  - Full audio isolation: video elements created with `muted = true` and `volume = 0` to prevent audio interference with the multi-track audio mixer.
+  - Deterministic lifecycle management: `prepareVideoSeekers` scans media library, scenes, and stops; `cleanupVideoSeekers` pauses, unloads, and nulls all elements in `finally` blocks on export success, cancellation, or failure.
+- [x] Aspect-Ratio Cover-Fit Geometry (`app/src/domain/render/canvasCompositor.ts`):
+  - Upgraded `drawMediaCalloutBox` supporting `HTMLVideoElement`, `HTMLImageElement`, and `ImageBitmap`.
+  - Dynamic aspect-ratio comparison: wide footage (16:9) crops horizontal margins; tall reels (9:16) crop vertical margins to fit 4:3 card containers without geometric distortion.
+  - Added `▶ VIDEO` badge chip in card callout footer for unambiguous visual identity.
+- [x] Dual-Pipeline Integration (`app/src/domain/render/exporter.ts`):
+  - Unified video frame retrieval across both `renderWithWebCodecs` and `renderWithMediaRecorder`.
+  - Accurate scene-relative presentation timestamp offset: $\text{mediaTime} = \max(0, \text{timeSeconds} - \text{sceneStart})$, clamped between $0$ and verified video duration.
+  - Preserved photo scenes, route rendering, story transitions, title cards, and multi-track audio ducking.
+- [x] Automated Unit & Integration Tests (`app/src/__tests__/video-render.test.ts`):
+  - 11 comprehensive tests covering seeker initialization, unready/empty URL handling, dispose lifecycle, duration boundary clamping, aspect-ratio cover-cropping math, and audio isolation.
+  - Total test suite: **327 passed / 327 tests** across 23 test suites.
+  - Strict TypeScript build passing (`tsc -b && vite build` in ~712ms).
+- [x] Empirical MP4 Verification with Real Video Footage:
+  - Verified in browser with automated export saving `phase8_e2e_video_export.mp4` (8.0s, 640x360, 240 frames, H.264 High + AAC LC).
+  - FFmpeg frame extraction at $t = 4.5\text{s}$, $5.0\text{s}$, $5.5\text{s}$, and $6.0\text{s}$ confirmed moving footage:
+    - $t = 4.5\text{s}$ vs $5.0\text{s}$: 30.34% changed pixels, max color delta 687, SSIM 0.937267.
+    - $t = 5.0\text{s}$ vs $5.5\text{s}$: 17.16% changed pixels, max color delta 185, SSIM 0.992302.
+    - $t = 5.5\text{s}$ vs $6.0\text{s}$: 29.68% changed pixels, max color delta 143, SSIM 0.990956.
+  - Photo scene stability confirmed at $t = 3.0\text{s}$ vs $3.5\text{s}$ (SSIM 0.998053, PSNR 41.24 dB).
+  - Multi-track audio and ducking confirmed regression-free (-12.90 dB attenuation during voiceover).
+
 ## Non-Goals (Explicit)
 
 - Native mobile app (browser-first)

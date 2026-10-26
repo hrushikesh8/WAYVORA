@@ -16,6 +16,7 @@ import { evaluateRenderFrame } from './contract';
 import { compositeRenderFrame } from './canvasCompositor';
 import { mixAudioPcm } from '../audio/mixer';
 import { prepareJourneyAudioBuffers } from '../audio/audioLoader';
+import { prepareVideoSeekers, cleanupVideoSeekers } from './videoSeeker';
 
 async function preloadMediaElements(journey: Journey): Promise<Map<string, HTMLImageElement>> {
   const cache = new Map<string, HTMLImageElement>();
@@ -373,6 +374,7 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
 
   const usPerFrame = 1e6 / fps;
   const mediaCache = await preloadMediaElements(journey);
+  const videoSeekers = await prepareVideoSeekers(journey);
 
   try {
     // 5. Render and encode video frames
@@ -400,7 +402,23 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       // Obtain map snapshot if available
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
       const activeAsset = frame.story.activeMedia?.[0];
-      const activeMediaElement = activeAsset ? mediaCache.get(activeAsset.id) : undefined;
+      let activeMediaElement: CanvasImageSource | undefined = undefined;
+
+      if (activeAsset) {
+        if (activeAsset.type === 'video') {
+          const seeker = videoSeekers.get(activeAsset.id);
+          if (seeker) {
+            const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
+            const mediaTime = Math.max(0, timeSeconds - sceneStart);
+            const videoEl = await seeker.seekTo(mediaTime);
+            if (videoEl) {
+              activeMediaElement = videoEl;
+            }
+          }
+        } else if (activeAsset.type === 'photo') {
+          activeMediaElement = mediaCache.get(activeAsset.id);
+        }
+      }
 
       // Composite complete visual frame
       compositeRenderFrame(ctx, frame, {
@@ -550,6 +568,8 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       audioEncoder.close();
     }
     throw err;
+  } finally {
+    cleanupVideoSeekers(videoSeekers);
   }
 }
 
@@ -601,6 +621,7 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
 
   recorder.start();
   const mediaCache = await preloadMediaElements(journey);
+  const videoSeekers = await prepareVideoSeekers(journey);
 
   try {
     for (let i = 0; i < totalFrames; i++) {
@@ -619,7 +640,23 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
 
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
       const activeAsset = frame.story.activeMedia?.[0];
-      const activeMediaElement = activeAsset ? mediaCache.get(activeAsset.id) : undefined;
+      let activeMediaElement: CanvasImageSource | undefined = undefined;
+
+      if (activeAsset) {
+        if (activeAsset.type === 'video') {
+          const seeker = videoSeekers.get(activeAsset.id);
+          if (seeker) {
+            const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
+            const mediaTime = Math.max(0, timeSeconds - sceneStart);
+            const videoEl = await seeker.seekTo(mediaTime);
+            if (videoEl) {
+              activeMediaElement = videoEl;
+            }
+          }
+        } else if (activeAsset.type === 'photo') {
+          activeMediaElement = mediaCache.get(activeAsset.id);
+        }
+      }
 
       compositeRenderFrame(ctx, frame, {
         mapCanvas,
@@ -671,6 +708,8 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
       recorder.stop();
     }
     throw err;
+  } finally {
+    cleanupVideoSeekers(videoSeekers);
   }
 }
 

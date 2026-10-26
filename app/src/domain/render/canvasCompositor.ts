@@ -6,7 +6,7 @@
    ─────────────────────────────────────────────────────────────────── */
 
 import type { RenderFrame, SafeAreaInsets, CinematicTreatment, ColorGradePreset } from './types';
-import type { AspectRatio, ActiveTitleCardState } from '../types';
+import type { AspectRatio, ActiveTitleCardState, MediaType } from '../types';
 import {
   drawTransportMarker2D,
   resolveCanonicalTransportMode,
@@ -487,16 +487,50 @@ function drawMediaCalloutBox(
     ctx.fillText(asset.filename, x + calloutW / 2, contentY + contentH / 2 + 14);
   } else if (mediaElement) {
     try {
+      let srcW = 0;
+      let srcH = 0;
+      if ('videoWidth' in mediaElement && (mediaElement as HTMLVideoElement).videoWidth > 0) {
+        srcW = (mediaElement as HTMLVideoElement).videoWidth;
+        srcH = (mediaElement as HTMLVideoElement).videoHeight;
+      } else if ('naturalWidth' in mediaElement && (mediaElement as HTMLImageElement).naturalWidth > 0) {
+        srcW = (mediaElement as HTMLImageElement).naturalWidth;
+        srcH = (mediaElement as HTMLImageElement).naturalHeight;
+      } else if ('width' in mediaElement) {
+        srcW = (mediaElement as ImageBitmap).width;
+        srcH = (mediaElement as ImageBitmap).height;
+      }
+
       ctx.save();
       drawRoundedRect(ctx, contentX, contentY, contentW, contentH, 8);
       ctx.clip();
-      ctx.drawImage(mediaElement, contentX, contentY, contentW, contentH);
+
+      if (srcW > 0 && srcH > 0) {
+        const srcAspect = srcW / srcH;
+        const dstAspect = contentW / contentH;
+        let sx = 0;
+        let sy = 0;
+        let sw = srcW;
+        let sh = srcH;
+
+        if (srcAspect > dstAspect) {
+          // Wider than container: crop horizontal sides
+          sw = srcH * dstAspect;
+          sx = (srcW - sw) / 2;
+        } else {
+          // Taller than container: crop vertical top/bottom
+          sh = srcW / dstAspect;
+          sy = (srcH - sh) / 2;
+        }
+        ctx.drawImage(mediaElement, sx, sy, sw, sh, contentX, contentY, contentW, contentH);
+      } else {
+        ctx.drawImage(mediaElement, contentX, contentY, contentW, contentH);
+      }
       ctx.restore();
     } catch {
-      drawMediaFallbackBox(ctx, contentX, contentY, contentW, contentH, asset.filename);
+      drawMediaFallbackBox(ctx, contentX, contentY, contentW, contentH, asset.filename, asset.type);
     }
   } else {
-    drawMediaFallbackBox(ctx, contentX, contentY, contentW, contentH, asset.filename);
+    drawMediaFallbackBox(ctx, contentX, contentY, contentW, contentH, asset.filename, asset.type);
   }
 
   // Authentic EXIF Metadata Tag Footer
@@ -509,6 +543,9 @@ function drawMediaCalloutBox(
 
   // GPS / Timestamp chip
   const metaParts: string[] = [];
+  if (asset.type === 'video') {
+    metaParts.push('▶ VIDEO');
+  }
   if (asset.geoPosition) {
     const lat = asset.geoPosition.lat.toFixed(2);
     const lng = asset.geoPosition.lng.toFixed(2);
@@ -520,7 +557,7 @@ function drawMediaCalloutBox(
   if (asset.timestamp) {
     metaParts.push(`🕒 ${asset.timestamp.split('T')[0]}`);
   }
-  const metaStr = metaParts.length > 0 ? metaParts.join('  ') : 'Verified Media Asset';
+  const metaStr = metaParts.length > 0 ? metaParts.join('  ') : (asset.type === 'video' ? '▶ Video Asset' : 'Verified Media Asset');
 
   ctx.fillStyle = '#38bdf8';
   ctx.font = '500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -535,7 +572,8 @@ function drawMediaFallbackBox(
   y: number,
   w: number,
   h: number,
-  filename: string
+  filename: string,
+  mediaType?: MediaType
 ): void {
   ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
@@ -546,7 +584,11 @@ function drawMediaFallbackBox(
   ctx.textAlign = 'center';
   ctx.fillStyle = '#94a3b8';
   ctx.font = '500 12px sans-serif';
-  ctx.fillText(`📷 ${filename}`, x + w / 2, y + h / 2);
+  if (mediaType === 'video') {
+    ctx.fillText(`🎬 [Video Unavailable] ${filename}`, x + w / 2, y + h / 2);
+  } else {
+    ctx.fillText(`📷 ${filename}`, x + w / 2, y + h / 2);
+  }
 }
 
 function drawTechnicalHud(
