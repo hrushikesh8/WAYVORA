@@ -60,6 +60,7 @@ import {
 import { PlaceSearch } from './components/PlaceSearch';
 import { MediaLibraryPanel } from './components/MediaLibraryPanel';
 import { MediaPreviewModal } from './components/MediaPreviewModal';
+import { WayvoraLogo } from './components/WayvoraLogo';
 import {
   type MediaAsset,
   importMediaFile,
@@ -86,6 +87,7 @@ import {
 import {
   OsrmRoutingProvider,
   MockRoutingProvider,
+  routingProfileForMode,
   type RouteResult,
   type RoutingProfile,
 } from './domain/routing';
@@ -482,7 +484,20 @@ export default function App() {
       fitMapToBounds(map, getAllPoints(journeyRef.current));
     });
 
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.resize();
+        }
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
     return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (searchMarkerRef.current) {
         searchMarkerRef.current.remove();
         searchMarkerRef.current = null;
@@ -1310,6 +1325,36 @@ export default function App() {
     const config = exportProfiles[selectedExportProfileIndex];
     if (!config) return;
 
+    const map = mapInstanceRef.current;
+    if (!map) {
+      alert('Map is not initialized or still loading. Please wait for the map to finish loading.');
+      return;
+    }
+
+    // Force map to resize to current container dimensions before export starts
+    map.resize();
+
+    // Verify style is loaded, or await style.load with bounded timeout
+    if (!map.isStyleLoaded()) {
+      showNotification('Waiting for map style and vector tiles to load before export...');
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            map.off('style.load', onStyleLoad);
+            reject(new Error('Map style did not finish loading within timeout'));
+          }, 6000);
+          const onStyleLoad = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+          map.once('style.load', onStyleLoad);
+        });
+      } catch (err) {
+        alert(err instanceof Error ? err.message : 'Map style failed to load');
+        return;
+      }
+    }
+
     setIsExporting(true);
     setExportResult(null);
     setExportProgress({
@@ -1319,7 +1364,7 @@ export default function App() {
       phase: 'preparing',
       elapsedMs: 0,
       estimatedRemainingMs: 0,
-      message: 'Initializing video encoder...',
+      message: 'Initializing video encoder and validating first frame...',
     });
 
     const abortController = new AbortController();
@@ -1333,16 +1378,18 @@ export default function App() {
           setExportProgress(prog);
         },
         getMapCanvas: async (frame) => {
-          const map = mapInstanceRef.current;
-          if (!map) return null;
-          map.jumpTo({
+          const m = mapInstanceRef.current;
+          if (!m) {
+            throw new Error('Map instance was unmounted during export');
+          }
+          m.jumpTo({
             center: [frame.camera.center.lng, frame.camera.center.lat],
             bearing: frame.camera.bearing,
             pitch: frame.camera.pitch,
             zoom: frame.camera.zoom,
           });
           syncTransportSourceData(
-            map,
+            m,
             frame.position,
             frame.bearing,
             frame.transportMode || 'car',
@@ -1352,8 +1399,20 @@ export default function App() {
               renderMode: transportRenderModeRef.current,
             }
           );
-          await new Promise((r) => requestAnimationFrame(r));
-          return map.getCanvas();
+          // Trigger WebGL repaint and await actual frame render completion
+          m.triggerRepaint();
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 150);
+            m.once('render', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          const canvas = m.getCanvas();
+          if (!canvas || canvas.width === 0 || canvas.height === 0) {
+            throw new Error(`Map canvas has invalid zero dimensions: ${canvas?.width}x${canvas?.height}`);
+          }
+          return canvas;
         },
       });
 
@@ -1368,6 +1427,30 @@ export default function App() {
     } finally {
       setIsExporting(false);
       exportAbortControllerRef.current = null;
+
+      // Restore map camera and transport marker to the active playhead position
+      // so the interactive preview is never left frozen or desynchronized
+      const m = mapInstanceRef.current;
+      const cur = currentFrameRef.current;
+      if (m && cur?.position) {
+        m.jumpTo({
+          center: [cur.position.lng, cur.position.lat],
+          bearing: cur.bearing,
+          pitch: mapPitch,
+          zoom: mapZoom,
+        });
+        syncTransportSourceData(
+          m,
+          cur.position,
+          cur.bearing,
+          cur.activeTransportMode || 'car',
+          {
+            modelLayer: transport3dLayerRef.current,
+            groundElevation: cur.position?.ele ?? 0,
+            renderMode: transportRenderModeRef.current,
+          }
+        );
+      }
     }
   };
 
@@ -1594,11 +1677,16 @@ export default function App() {
     }
   };
 
-  // Road Routing Action Handlers
+  // Road / Trail Routing Action Handlers
   const handleRequestRoadRoute = async (segmentId: string, useMockFallback = false) => {
     const seg = journey.segments.find((s) => s.id === segmentId);
     if (!seg || seg.points.length < 2) {
-      showNotification('Segment must have at least 2 points to calculate a road route.');
+      showNotification('Segment must have at least 2 points to calculate a route.');
+      return;
+    }
+
+    if (seg.sourceFormat === 'gpx' || seg.metadata?.isOriginalImport === true) {
+      showNotification('Recorded GPX tracks cannot be replaced by calculated routes. Original coordinates are preserved.');
       return;
     }
 
@@ -1609,6 +1697,8 @@ export default function App() {
     setRoutingError(null);
     setPendingRoute(null);
 
+    const profileToUse = routingProfile || routingProfileForMode(seg.transportMode);
+
     const provider = useMockFallback
       ? new MockRoutingProvider()
       : new OsrmRoutingProvider({ timeoutMs: 8000 });
@@ -1617,18 +1707,23 @@ export default function App() {
       const result = await provider.calculateRoute({
         origin: { lat: origin.lat, lng: origin.lng, ele: origin.ele },
         destination: { lat: destination.lat, lng: destination.lng, ele: destination.ele },
-        profile: routingProfile,
+        profile: profileToUse,
       });
 
       if (result.success && result.points.length >= 2) {
         setRoutingStatus('success');
         setPendingRoute({ segmentId, result });
+        const label = profileToUse === 'walking' || profileToUse === 'hiking'
+          ? 'Trail route'
+          : profileToUse === 'cycling'
+          ? 'Cycling route'
+          : 'Road route';
         showNotification(
-          `Road route calculated: ${(result.distanceMetres / 1000).toFixed(1)} km (${result.points.length} points)`
+          `${label} calculated: ${(result.distanceMetres / 1000).toFixed(1)} km (${result.points.length} points)`
         );
       } else {
         setRoutingStatus('error');
-        const errMsg = result.error?.message ?? 'Failed to calculate road route.';
+        const errMsg = result.error?.message ?? 'Failed to calculate route.';
         setRoutingError(errMsg);
         showNotification(`Routing error: ${errMsg}`);
       }
@@ -1644,9 +1739,15 @@ export default function App() {
     if (!pendingRoute) return;
     try {
       const updated = applyRouteToSegment(journey, pendingRoute.segmentId, pendingRoute.result);
+      const profile = pendingRoute.result.metadata.profile;
+      const label = profile === 'walking' || profile === 'hiking'
+        ? 'trail'
+        : profile === 'cycling'
+        ? 'cycling'
+        : 'road';
       applyJourneyEdit(
         updated,
-        `Applied road route: ${(pendingRoute.result.distanceMetres / 1000).toFixed(1)} km via ${pendingRoute.result.metadata.providerName}`
+        `Applied ${label} route: ${(pendingRoute.result.distanceMetres / 1000).toFixed(1)} km via ${pendingRoute.result.metadata.providerName}`
       );
       setPendingRoute(null);
       setRoutingStatus('idle');
@@ -1799,13 +1900,7 @@ export default function App() {
       <header className="studio-header">
         <div className="brand-section">
           <div className="brand-logo">
-            <div className="logo-badge">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#050b14" strokeWidth="2.5">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-              </svg>
-            </div>
-            <span className="brand-title">WAYVORA</span>
-            <span className="tag-version">STUDIO V1</span>
+            <WayvoraLogo variant="primary" size={30} showVersion={true} />
           </div>
 
           <select

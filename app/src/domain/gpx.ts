@@ -11,6 +11,7 @@ import type {
   TransportMode,
   StopType,
 } from './types';
+import { segmentTypeForMode } from './types';
 import {
   createJourney,
   createSegment,
@@ -567,11 +568,13 @@ function convertToJourneySegments(
   let segIdx = 0;
   for (const trk of tracks) {
     for (const seg of trk.segments) {
+      const segType = segmentTypeForMode(mode);
       const journeySeg: JourneySegment = {
-        ...createSegment('trail', mode, seg.points, 'gpx'),
+        ...createSegment(segType, mode, seg.points, 'gpx'),
         metadata: {
           provenance: {
             source: 'gpx_import',
+            category: 'recorded_track',
             filename: summary.filename,
             importedAt: summary.importedAt,
             trackName: trk.name,

@@ -50,8 +50,15 @@ export function segmentTypeForMode(mode: TransportMode): SegmentType {
 
 // ── Journey Segment ──
 
+export type RouteGeometryCategory =
+  | 'verified_network'     // Verified route following road/trail network from a routing provider
+  | 'recorded_track'       // Recorded GPS track (e.g. from GPX import)
+  | 'manual_direct'        // Direct manual connection (e.g. user-placed waypoints or straight line)
+  | 'estimated_fallback';  // Fallback or estimated connection when routing is unavailable
+
 export interface ProvenanceMetadata {
   source?: string;
+  category?: RouteGeometryCategory;
   filename?: string;
   importedAt?: string;
   trackName?: string;
@@ -60,12 +67,15 @@ export interface ProvenanceMetadata {
   distanceMetres?: number;
   elevationGainMetres?: number;
   elevationLossMetres?: number;
+  routedProfile?: string;
+  isEstimatedFallback?: boolean;
   [key: string]: unknown;
 }
 
 export interface SegmentMetadata {
   provenance?: string | ProvenanceMetadata;
   isOriginalImport?: boolean;
+  isEstimatedFallback?: boolean;
   [key: string]: unknown;
 }
 
@@ -76,6 +86,31 @@ export interface JourneySegment {
   points: RoutePoint[];
   sourceFormat: SourceFormat;
   metadata?: SegmentMetadata;
+}
+
+/**
+ * Returns the verified geometry category for a segment, strictly distinguishing
+ * verified network routing, recorded GPS tracks, manual connections, and fallbacks.
+ */
+export function getSegmentGeometryCategory(segment: JourneySegment): RouteGeometryCategory {
+  const meta = segment.metadata;
+  const prov = typeof meta?.provenance === 'object' && meta.provenance !== null
+    ? (meta.provenance as Record<string, unknown>)
+    : undefined;
+
+  if (prov?.category) {
+    return prov.category as RouteGeometryCategory;
+  }
+  if (segment.sourceFormat === 'gpx' || prov?.source === 'gpx_import' || meta?.isOriginalImport) {
+    return 'recorded_track';
+  }
+  if (segment.sourceFormat === 'osrm' || (meta?.routing && typeof meta.routing === 'object')) {
+    return 'verified_network';
+  }
+  if (prov?.isEstimatedFallback || prov?.source === 'estimated_fallback' || meta?.isEstimatedFallback) {
+    return 'estimated_fallback';
+  }
+  return 'manual_direct';
 }
 
 // ── Stops ──

@@ -1,8 +1,61 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 8 — Moving Video Media Rendering & Cinematic Export Parity  
+> Session: Phase 2 — Route Geometry Correctness Only  
 > Date: 2026-10-26  
-> Status: Phase 8 VERIFIED · 327/327 Unit & Acceptance Tests Passing · Production Build Green · Real Moving Video MP4 Export Verified via FFmpeg & Pixel Difference Analysis  
+> Status: Phase 2 COMPLETE & VERIFIED · 354/354 Unit & Acceptance Tests Passing (25/25 Suites) · Production Build Green (758ms) · Driving Road Curvature Verified · Hiking Trail Switchbacks Preserved · Recorded GPX Track Protection Active · Provenance Categorization Established · Live OSRM Integration Verified  
+
+---
+
+## 1. Executive Summary: Phase 2 — Route Geometry Correctness Only
+
+Phase 2 ensures that every journey is represented by geographically appropriate route geometry. Driving routes follow road-network geometry, hiking routes follow mapped trails or recorded tracks preserving switchbacks and elevation progression, cycling routes utilize appropriate cycling profiles without substituting driving geometry, and recorded GPX tracks are strictly guarded against accidental silent replacement.
+
+### Verified Defects Identified & Eliminated:
+1. **Hardcoded Segment Type in Routing Application (`applyRouteToSegment` in `editor.ts`)**:
+   - *Defect*: `applyRouteToSegment` previously hardcoded `type: 'road'` onto any segment receiving routing geometry, corrupting hiking segments (`mode: 'hike'`) and cycling segments (`mode: 'bike'`) into road segments.
+   - *Fix*: Dynamically preserves `segmentTypeForMode(existingSeg.transportMode)`, guaranteeing that hiking and walking segments remain `type: 'trail'`, while car/bus/motorcycle remain `type: 'road'`.
+2. **Silent Destruction of Recorded GPX Tracks (`applyRouteToSegment` in `editor.ts`)**:
+   - *Defect*: Recorded GPS tracks imported from GPX files could be silently overwritten by newly calculated routes without user authorization or warning.
+   - *Fix*: Added strict guard in `applyRouteToSegment`. If a segment is an imported GPX track (`sourceFormat === 'gpx'` or `isOriginalImport: true` or `provenance.category === 'recorded_track'`), it rejects replacement with typed `EditError` unless explicitly authorized via `options.allowRecordedTrackReplacement`.
+3. **Missing Geometry Provenance Categorization (`types.ts`, `diagnostics.ts`)**:
+   - *Defect*: No first-class distinction existed between verified network routes, recorded GPS tracks, manual straight-line connections, and estimated fallbacks.
+   - *Fix*: Introduced `RouteGeometryCategory = 'verified_network' | 'recorded_track' | 'manual_direct' | 'estimated_fallback'` and `getSegmentGeometryCategory()`. Stamped explicit provenance across GPX import, routing, and manual waypoints.
+4. **OSRM Profile Misattribution and Generic Error Messages (`osrm.ts`, `mock.ts`)**:
+   - *Defect*: OSRM provider returned a generic "No navigable road route found" error even when querying walking/hiking or cycling profiles, and lacked support for `hiking` mode mapping.
+   - *Fix*: Added `routingProfileForMode(mode)`, mapped `hiking` and `walking` to foot, `cycling` to bike, and returned honest, profile-specific error messages distinguishing roads, trails, and cycling routes without inventing fake paths.
+5. **Trail Geometry Simplification in Mock Provider (`mock.ts`)**:
+   - *Defect*: Mock routing provider previously generated simple highway arcs for all profiles, failing to model alpine trail switchbacks and bends.
+   - *Fix*: Implemented `synthesizeTrailPoints` in `MockRoutingProvider` simulating high-frequency alternating switchbacks with realistic elevation climb for hiking/walking profiles, and `synthesizeRoadPoints` with profile-appropriate speeds and curvatures.
+
+Phase 1 focuses exclusively on rendering reliability across both the interactive preview player and offline video export pipelines. It diagnoses, fixes, and verifies the root causes of blank, black, missing, and stale frames without altering route geometry, terrain styling, camera art direction, transport models, story design, or audio behavior.
+
+### Verified Root Causes Identified & Eliminated:
+1. **Map Readiness Failure on Export Start**: Export jobs could be initiated before MapLibre GL had finished loading vector styles, shaders, or container dimensions, leading to unrendered or zero-dimension canvas submissions.
+2. **Frame Scheduling Desynchronization in WebGL**: The exporter relied on a bare `requestAnimationFrame` after `map.jumpTo()`, which frequently resolved before MapLibre's internal WebGL draw calls completed, resulting in unrendered or uncleared buffers.
+3. **Missing First-Frame Validation Gate**: Neither WebCodecs nor MediaRecorder verified frame 0 before encoding, allowing black or blank frames to enter the video stream without error.
+4. **Silent Error Suppression in Canvas Compositor**: When `mapCanvas` was invalid or threw, `canvasCompositor.ts` caught the error silently and substituted a dark navy fallback gradient, masking rendering failures from the exporter and user.
+5. **Post-Export Preview Freeze / Desynchronization**: MapLibre's camera was left at the final export timestamp upon export completion or abort, leaving the interactive preview desynchronized from the paused playhead.
+6. **Container Layout Resizing Race Condition**: Absence of a `ResizeObserver` on the map container meant DOM layout changes could leave MapLibre's canvas at stale or zero dimensions.
+
+### Smallest Reliable Fixes Implemented:
+1. **Pixel Validation Engine (`validateRenderedFramePixels` in `canvasCompositor.ts`)**:
+   - Inspects sampled grid pixels across the canvas context.
+   - Detects completely transparent (`alpha = 0`) or completely black (`maxLuminance < 1`) frames.
+   - Accurately distinguishes legitimate dark scenes (e.g. active fade transitions) from actual rendering failures.
+2. **Pre-Flight First-Frame Validation Gate (`validateAndPrepareFirstFrame` in `exporter.ts`)**:
+   - Evaluates and composites frame 0 before starting the hardware encoder or recorder.
+   - Inspects pixel output and throws typed `RenderingError` on blank/black output.
+3. **Explicit Error Propagation (`requireMapCanvas` in `canvasCompositor.ts`)**:
+   - Throws descriptive errors if expected map canvas is missing, 0x0, or fails to draw, terminating silent failure masking.
+4. **Structured Error Diagnostics (`RenderingError` in `exporter.ts`)**:
+   - Exposes `frameIndex`, `timestampSeconds`, and structured `diagnosticDetails`.
+5. **WebGL Render Synchronization in `App.tsx` (`handleStartExport`)**:
+   - Triggers `map.triggerRepaint()` and awaits `map.once('render')` with safety fallback.
+   - Verifies canvas dimensions (`width > 0 && height > 0`) before submission.
+6. **Preview State Recovery in `handleStartExport`**:
+   - Restores map camera and transport marker to active playhead position in `finally` block.
+7. **Container `ResizeObserver` in `App.tsx`**:
+   - Synchronizes MapLibre canvas dimensions with container layout updates.
 
 ---
 

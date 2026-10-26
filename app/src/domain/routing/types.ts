@@ -1,4 +1,4 @@
-import type { RoutePoint } from '../types';
+import type { RoutePoint, TransportMode } from '../types';
 
 export interface RouteWaypoint {
   lat: number;
@@ -7,7 +7,45 @@ export interface RouteWaypoint {
   ele?: number;
 }
 
-export type RoutingProfile = 'driving' | 'cycling' | 'walking';
+export type RoutingProfile = 'driving' | 'cycling' | 'walking' | 'hiking';
+
+/**
+ * Maps a journey transport mode to its geographically appropriate routing profile.
+ * - 'car', 'bus', 'motorcycle', 'camper', 'tuktuk' -> 'driving'
+ * - 'bike' -> 'cycling'
+ * - 'walk', 'run' -> 'walking'
+ * - 'hike' -> 'hiking' (or walking for road/trail network)
+ */
+export function routingProfileForMode(mode: TransportMode): RoutingProfile {
+  switch (mode) {
+    case 'bike':
+      return 'cycling';
+    case 'hike':
+      return 'hiking';
+    case 'walk':
+    case 'run':
+      return 'walking';
+    case 'car':
+    case 'bus':
+    case 'motorcycle':
+    case 'camper':
+    case 'tuktuk':
+    default:
+      return 'driving';
+  }
+}
+
+/**
+ * Returns true if the transport mode is supported by ground road/trail network routing.
+ * Modes like 'plane' (air) or 'boat'/'ferry' (sea) use direct or maritime paths.
+ */
+export function isNetworkRoutableMode(mode: TransportMode): boolean {
+  return [
+    'car', 'bus', 'motorcycle', 'camper', 'tuktuk',
+    'bike',
+    'walk', 'hike', 'run'
+  ].includes(mode);
+}
 
 export interface RouteRequest {
   origin: RouteWaypoint;

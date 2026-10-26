@@ -116,7 +116,20 @@ export class OsrmRoutingProvider implements RoutingAdapter {
 
       if (json.code !== 'Ok' || !json.routes || json.routes.length === 0) {
         const osrmCode = json.code ?? 'UNKNOWN_ERROR';
-        const errorMsg = json.message ?? (osrmCode === 'NoRoute' ? 'No navigable road route found between the specified coordinates.' : `OSRM returned code: ${osrmCode}`);
+        let errorMsg = json.message;
+        if (!errorMsg) {
+          if (osrmCode === 'NoRoute') {
+            if (profile === 'walking' || profile === 'hiking') {
+              errorMsg = 'No mapped trail or walkable route found between the specified coordinates.';
+            } else if (profile === 'cycling') {
+              errorMsg = 'No navigable cycling route found between the specified coordinates.';
+            } else {
+              errorMsg = 'No navigable road route found between the specified coordinates.';
+            }
+          } else {
+            errorMsg = `OSRM returned code: ${osrmCode}`;
+          }
+        }
 
         return {
           success: false,
@@ -239,6 +252,7 @@ export class OsrmRoutingProvider implements RoutingAdapter {
       case 'cycling':
         return 'bike';
       case 'walking':
+      case 'hiking':
         return 'foot';
       case 'driving':
       default:

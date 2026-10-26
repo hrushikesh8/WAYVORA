@@ -174,6 +174,12 @@ export function journeyFromWaypoints(
     const endPt = createRoutePoint(curr.lng, curr.lat, curr.ele);
 
     const segment = createSegment(type, mode, [startPt, endPt], 'manual');
+    segment.metadata = {
+      provenance: {
+        source: 'manual_waypoints',
+        category: 'manual_direct',
+      },
+    };
     journey = addSegmentToJourney(journey, segment);
 
     const stopType: StopType = i === waypoints.length - 1 ? 'end' : 'waypoint';

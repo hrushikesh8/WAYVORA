@@ -441,10 +441,24 @@ export function redoEditorHistory(history: EditorHistory): EditorHistory {
  * - Preserving or updating attached stop positions at segment boundaries.
  * - Enforcing that routeResult must be successful and have >= 2 points.
  */
+export interface ApplyRouteOptions {
+  allowRecordedTrackReplacement?: boolean;
+}
+
+/**
+ * Applies a calculated route geometry to an existing journey segment:
+ * - Replaces segment points with the calculated route points.
+ * - Preserves appropriate segment type based on transport mode (road, trail, etc.).
+ * - Strictly guards recorded GPX tracks against accidental silent replacement.
+ * - Records routing metadata and provenance category ('verified_network').
+ * - Preserves or updates attached stop positions at segment boundaries.
+ * - Enforcing that routeResult must be successful and have >= 2 points.
+ */
 export function applyRouteToSegment(
   journey: Journey,
   segmentId: string,
-  routeResult: RouteResult
+  routeResult: RouteResult,
+  options?: ApplyRouteOptions
 ): Journey {
   if (!routeResult.success || !routeResult.points || routeResult.points.length < 2) {
     throw new EditError(
@@ -459,15 +473,31 @@ export function applyRouteToSegment(
 
   const existingSeg = journey.segments[segIndex];
 
+  // Strictly guard recorded GPX journeys: preserve recorded coordinates unless replacement is explicitly authorized
+  const isRecordedTrack =
+    existingSeg.sourceFormat === 'gpx' ||
+    existingSeg.metadata?.isOriginalImport === true ||
+    (typeof existingSeg.metadata?.provenance === 'object' &&
+      (existingSeg.metadata?.provenance as Record<string, unknown>)?.category === 'recorded_track');
+
+  if (isRecordedTrack && !options?.allowRecordedTrackReplacement) {
+    throw new EditError(
+      'Cannot silently replace recorded GPX track with a calculated route. Recorded tracks must preserve original coordinates and point order unless replacement is explicitly authorized.'
+    );
+  }
+
   // Clone existing metadata and provenance
   const prevMeta = existingSeg.metadata ?? {};
   const prevProv = typeof prevMeta.provenance === 'object' && prevMeta.provenance !== null
     ? (prevMeta.provenance as Record<string, unknown>)
     : {};
 
+  // Preserve geographically appropriate segment type for the mode (e.g. 'trail' for hike/bike/walk, 'road' for driving)
+  const segmentType = segmentTypeForMode(existingSeg.transportMode);
+
   const updatedSegment: JourneySegment = {
     ...existingSeg,
-    type: 'road',
+    type: segmentType,
     sourceFormat: 'osrm',
     points: [...routeResult.points],
     metadata: {
@@ -487,8 +517,10 @@ export function applyRouteToSegment(
       provenance: {
         ...prevProv,
         source: 'routed',
+        category: 'verified_network',
         routedBy: routeResult.metadata.providerId,
         routedAt: routeResult.metadata.retrievedAt,
+        routedProfile: routeResult.metadata.profile,
         routedDistanceMetres: routeResult.distanceMetres,
         routedDurationSeconds: routeResult.durationSeconds,
       },
@@ -524,7 +556,7 @@ export function applyRouteToSegment(
 }
 
 /**
- * Creates and appends a new road segment from a routing result.
+ * Creates and appends a new segment from a routing result.
  */
 export function createRoutedSegment(
   journey: Journey,
@@ -538,9 +570,11 @@ export function createRoutedSegment(
   }
 
   const newSegmentId = generateId();
+  const segmentType = segmentTypeForMode(mode);
+
   const newSegment: JourneySegment = {
     id: newSegmentId,
-    type: 'road',
+    type: segmentType,
     transportMode: mode,
     sourceFormat: 'osrm',
     points: [...routeResult.points],
@@ -558,8 +592,10 @@ export function createRoutedSegment(
       },
       provenance: {
         source: 'routed',
+        category: 'verified_network',
         routedBy: routeResult.metadata.providerId,
         routedAt: routeResult.metadata.retrievedAt,
+        routedProfile: routeResult.metadata.profile,
         routedDistanceMetres: routeResult.distanceMetres,
         routedDurationSeconds: routeResult.durationSeconds,
       },

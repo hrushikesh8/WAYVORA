@@ -9,6 +9,7 @@
    ─────────────────────────────────────────────────────────────────── */
 
 import type { Journey, RoutePoint } from './types';
+import { getSegmentGeometryCategory } from './types';
 import { haversineDistance } from './geo';
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info';
@@ -42,6 +43,12 @@ export interface DiagnosticMetrics {
   elevationLossMetres: number;
   boundaryGapsCount: number;
   maxBoundaryGapMetres: number;
+  geometryCategories: {
+    verifiedNetworkCount: number;
+    recordedTrackCount: number;
+    manualDirectCount: number;
+    estimatedFallbackCount: number;
+  };
 }
 
 export interface JourneyDiagnosticsReport {
@@ -124,9 +131,23 @@ export function auditJourneyDiagnostics(
   let boundaryGapsCount = 0;
   let maxBoundaryGapMetres = 0;
 
+  const geometryCategories = {
+    verifiedNetworkCount: 0,
+    recordedTrackCount: 0,
+    manualDirectCount: 0,
+    estimatedFallbackCount: 0,
+  };
+
   journey.segments.forEach((seg, sIdx) => {
     const points = seg.points;
     totalPointsCount += points.length;
+
+    // Track geometry category
+    const cat = getSegmentGeometryCategory(seg);
+    if (cat === 'verified_network') geometryCategories.verifiedNetworkCount++;
+    else if (cat === 'recorded_track') geometryCategories.recordedTrackCount++;
+    else if (cat === 'estimated_fallback') geometryCategories.estimatedFallbackCount++;
+    else geometryCategories.manualDirectCount++;
 
     // Check minimum segment points
     if (points.length < 2) {
@@ -324,6 +345,7 @@ export function auditJourneyDiagnostics(
       elevationLossMetres: totalLoss,
       boundaryGapsCount,
       maxBoundaryGapMetres: Math.round(maxBoundaryGapMetres),
+      geometryCategories,
     },
   };
 }
