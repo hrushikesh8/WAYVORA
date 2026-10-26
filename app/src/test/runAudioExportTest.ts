@@ -34,6 +34,27 @@ export async function runDeterministicAudioExport(): Promise<{
   let journey = journeyFromWaypoints('Phase 6.1 Audio Acceptance Journey', waypoints);
   journey.timeline.duration = 8.0;
 
+  // Create a distinctive in-memory test image
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 64;
+  sampleCanvas.height = 64;
+  const sCtx = sampleCanvas.getContext('2d')!;
+  sCtx.fillStyle = '#f59e0b'; // Gold
+  sCtx.fillRect(0, 0, 64, 64);
+  sCtx.fillStyle = '#10b981'; // Emerald center
+  sCtx.fillRect(16, 16, 32, 32);
+  const samplePhotoUrl = sampleCanvas.toDataURL('image/png');
+
+  const photoAsset = {
+    id: 'asset-test-photo',
+    type: 'photo' as const,
+    filename: 'alps_summit_marker.png',
+    url: samplePhotoUrl,
+    title: 'Alps Summit Marker',
+    geoPosition: { lng: 7.97, lat: 46.545, ele: 2240 },
+  };
+  journey.mediaLibrary = [photoAsset];
+
   // 2. Story Scenes & Title Cards
   const scenes: StoryScene[] = [
     {
@@ -47,6 +68,7 @@ export async function runDeterministicAudioExport(): Promise<{
       title: 'Alpine Journey Begins',
       subtitle: 'Starting from the green valley floor',
       transition: { type: 'fade', duration: 0.5 },
+      media: [photoAsset],
     },
     {
       id: 'sc-2-ascent',

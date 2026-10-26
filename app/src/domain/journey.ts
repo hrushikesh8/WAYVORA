@@ -97,6 +97,7 @@ export function createJourney(name: string, description = ''): Journey {
     stops: [],
     timeline: createTimeline(),
     exportProfiles: [...DEFAULT_EXPORT_PROFILES],
+    mediaLibrary: [],
   };
 }
 

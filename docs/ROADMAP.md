@@ -446,6 +446,40 @@
 - [x] Browser QA Verification:
   - Verified in browser with automated recording and screenshots (`phase6_audio_verification`, `phase6_audio_tab_screenshot`): multi-track timeline overview, ducking card controls, live ducking status indicator, score generation, and synchronized MP4 video export.
 
+## Phase 7: Media Library & Import Workflow
+**Status**: VERIFIED & COMPLETE (2026-10-26)
+
+- [x] Local-First Media Architecture & Binary Persistence (`app/src/domain/media/`):
+  - Dedicated IndexedDB engine (`wayvora_media_store_v1`, `media_blobs`) storing raw photo, video, and audio files by `storageKey` (`blob_${assetId}`).
+  - Transparent `MemoryBlobStore` fallback for Node.js / Vitest automated test environments.
+  - Project JSON serialization decoupling: `.wayvora.json` stores lightweight metadata, dimensions, timestamps, and keys without embedding raw binary or base64 blobs, preventing quota exhaustion and project bloat.
+  - Startup lifecycle rehydration (`reviveMediaUrls`): reconstructs temporary `blob:` ObjectURLs via `mediaRegistry` upon browser reload and flags missing assets cleanly with `isMissing: true`.
+- [x] Ingestion Validation & Content Deduplication:
+  - Format validation against practical browser capabilities (JPEG, PNG, WebP, MP4, WebM, MP3, WAV, AAC, OGG).
+  - Explicit size boundaries enforced (photos ≤ 50MB, audio ≤ 100MB, videos ≤ 500MB).
+  - Fast 64-bit content fingerprinting combining file chunk sampling and metadata to prevent accidental duplicate entries.
+- [x] Authentic EXIF & Metadata Extraction:
+  - Zero-fabrication policy: leverages `parseJpegExif` for authentic capture dates, GPS coordinates, elevation, and camera model.
+  - Real dimension and duration extraction via offscreen DOM media elements with timeout boundaries.
+  - Distinguishes original metadata from derived values; absent metadata remains strictly `undefined`.
+- [x] Studio Media Library Interface (`app/src/components/MediaLibraryPanel.tsx`, `app/src/components/MediaPreviewModal.tsx`):
+  - Dedicated **🖼️ Media** studio tab with badge counter in main sidebar.
+  - Drag-and-drop ingestion dropzone and file browser picker.
+  - Search bar with instant text filtering and clear button.
+  - Type filter pill buttons (`All`, `Photos`, `Videos`, `Audio`).
+  - Asset cards featuring thumbnail previews, type badges, dimensions/duration chips, and quick action buttons.
+  - Detailed inspection & preview modal with authentic metadata viewer and one-click scene / audio track assignment.
+- [x] Story Scene & Audio Timeline Integration:
+  - Attached media dropdown in Story Scene cards linking media assets without mutating timing, transitions, or captions.
+  - Safe cascading deletion: deleting an asset from the media library unlinks it from scenes and stops without corrupting route geometry or scene order.
+  - Audio track integration: audio assets can be appended directly to music or voiceover tracks with authentic duration metadata.
+- [x] Automated Test Suite (`app/src/__tests__/media.test.ts`):
+  - 20 comprehensive unit and integration tests covering validation, fingerprinting, deduplication, EXIF extraction, binary persistence, URL revival, scene/audio integration, undo/redo, and serialization roundtrips.
+  - Total test suite: **315 passed / 315 tests** across 22 test suites.
+  - Strict TypeScript build passing (`tsc -b && vite build` in ~779ms).
+- [x] Browser QA Verification:
+  - Full browser automation verified: panel layout, search/filtering, file upload handling, preview modal, Story Scene media selector, and IndexedDB persistence across page refresh.
+
 ## Non-Goals (Explicit)
 
 - Native mobile app (browser-first)

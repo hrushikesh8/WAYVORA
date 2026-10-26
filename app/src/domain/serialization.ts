@@ -192,6 +192,38 @@ function migrateProject(fromVersion: number, journeyRaw: unknown): Journey {
       };
     }
 
+    if (Array.isArray(raw.mediaLibrary)) {
+      journey.mediaLibrary = (raw.mediaLibrary as any[]).map((m: any) => ({
+        id: String(m.id || ''),
+        type: m.type === 'video' || m.type === 'audio' ? m.type : 'photo',
+        url: String(m.url || ''),
+        filename: String(m.filename || 'media'),
+        title: m.title ? String(m.title) : undefined,
+        caption: m.caption ? String(m.caption) : undefined,
+        attribution: m.attribution ? String(m.attribution) : undefined,
+        mimeType: m.mimeType ? String(m.mimeType) : undefined,
+        sizeBytes: typeof m.sizeBytes === 'number' ? m.sizeBytes : undefined,
+        width: typeof m.width === 'number' ? m.width : undefined,
+        height: typeof m.height === 'number' ? m.height : undefined,
+        durationSeconds: typeof m.durationSeconds === 'number' ? m.durationSeconds : undefined,
+        geoPosition: m.geoPosition && typeof m.geoPosition === 'object' ? {
+          lat: Number(m.geoPosition.lat),
+          lng: Number(m.geoPosition.lng),
+          ele: typeof m.geoPosition.ele === 'number' ? m.geoPosition.ele : undefined,
+        } : undefined,
+        timestamp: m.timestamp ? String(m.timestamp) : undefined,
+        cameraModel: m.cameraModel ? String(m.cameraModel) : undefined,
+        stopId: m.stopId ? String(m.stopId) : undefined,
+        sceneId: m.sceneId ? String(m.sceneId) : undefined,
+        fingerprint: m.fingerprint ? String(m.fingerprint) : undefined,
+        storageKey: m.storageKey ? String(m.storageKey) : undefined,
+        isMissing: Boolean(m.isMissing),
+        createdAt: m.createdAt ? String(m.createdAt) : undefined,
+      }));
+    } else {
+      journey.mediaLibrary = [];
+    }
+
     return journey;
   }
   throw new DeserializationError(`Unknown project version: ${fromVersion}`);

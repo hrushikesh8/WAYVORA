@@ -40,7 +40,6 @@ import {
   deleteStoryScene,
   attachMediaToScene,
   attachMediaToStop,
-  removeMedia,
   addAudioClip,
   updateAudioClip,
   deleteAudioClip,
@@ -51,9 +50,22 @@ import {
   updateTitleCards,
   updateAudioDucking,
   alignClipToScene,
+  addMediaToLibrary,
+  removeMediaFromLibrary,
+  assignMediaToScene,
+  removeMediaFromScene,
+  addMediaToAudioTrack,
   type EditorHistory,
 } from './domain/editor';
 import { PlaceSearch } from './components/PlaceSearch';
+import { MediaLibraryPanel } from './components/MediaLibraryPanel';
+import { MediaPreviewModal } from './components/MediaPreviewModal';
+import {
+  type MediaAsset,
+  importMediaFile,
+  reviveMediaUrls,
+  deleteMediaBlob,
+} from './domain/media';
 import type { GeocodeResult } from './domain/geocoding';
 import {
   type AudioClip,
@@ -183,8 +195,13 @@ export default function App() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('overview');
   const [mapPitch, setMapPitch] = useState(45);
   const [mapZoom, setMapZoom] = useState(11);
-  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'audio' | 'stats' | 'export'>('stops');
+  const [activeTab, setActiveTab] = useState<'stops' | 'segments' | 'story' | 'audio' | 'media' | 'stats' | 'export'>('stops');
   const [notification, setNotification] = useState<string | null>(null);
+
+  // Media Library State
+  const [selectedMediaForPreview, setSelectedMediaForPreview] = useState<MediaAsset | null>(null);
+  const [isImportingMedia, setIsImportingMedia] = useState(false);
+  const [mediaImportMessage, setMediaImportMessage] = useState<string | null>(null);
 
   // Audio Timeline State & Refs
   const audioFileInputRef = useRef<HTMLInputElement>(null);
@@ -321,6 +338,13 @@ export default function App() {
     }, 1200);
     return () => clearTimeout(timer);
   }, [journey]);
+
+  // Hydrate local-first media ObjectURLs on startup
+  useEffect(() => {
+    reviveMediaUrls(journey).then((revived) => {
+      setJourney(revived);
+    });
+  }, []);
 
   // Switch presets
   const handleSelectPreset = (presetId: string) => {
@@ -1017,10 +1041,6 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleRemoveMedia = (mediaId: string) => {
-    const updated = removeMedia(journey, mediaId);
-    applyJourneyEdit(updated, 'Media removed');
-  };
 
   // Audio Timeline Handlers
   const handleAddSyntheticScore = (trackId: string) => {
@@ -1409,6 +1429,82 @@ export default function App() {
     setEditorHistory((h) => pushEditorHistory(h, newJourney));
     setIsSaved(false);
     if (notificationMsg) showNotification(notificationMsg);
+  };
+
+  // Media Library Handlers
+  const handleImportMediaFiles = async (files: FileList | File[]) => {
+    setIsImportingMedia(true);
+    setMediaImportMessage(null);
+    let importedCount = 0;
+    let duplicateCount = 0;
+    const errorMessages: string[] = [];
+    let currentJourney = journey;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const result = await importMediaFile(file, { existingLibrary: currentJourney.mediaLibrary });
+      if (result.success && result.asset) {
+        if (result.isDuplicate) {
+          duplicateCount++;
+        } else {
+          currentJourney = addMediaToLibrary(currentJourney, result.asset);
+          importedCount++;
+        }
+      } else if (result.error) {
+        errorMessages.push(result.error);
+      }
+    }
+
+    if (importedCount > 0) {
+      applyJourneyEdit(currentJourney, `Imported ${importedCount} media asset${importedCount > 1 ? 's' : ''}`);
+    }
+
+    let msg = '';
+    if (importedCount > 0) msg += `Successfully imported ${importedCount} file${importedCount > 1 ? 's' : ''}. `;
+    if (duplicateCount > 0) msg += `${duplicateCount} file${duplicateCount > 1 ? 's were' : ' was'} already in library. `;
+    if (errorMessages.length > 0) msg += `Note: ${errorMessages.join('; ')}`;
+    setMediaImportMessage(msg || 'No new files imported.');
+    setIsImportingMedia(false);
+  };
+
+  const handleDeleteMediaAsset = async (assetId: string) => {
+    const asset = (journey.mediaLibrary ?? []).find((m) => m.id === assetId);
+    if (asset?.storageKey) {
+      await deleteMediaBlob(asset.storageKey);
+    }
+    const updated = removeMediaFromLibrary(journey, assetId);
+    applyJourneyEdit(updated, `Deleted media asset: ${asset?.filename ?? assetId}`);
+  };
+
+  const handleAssignMediaToScene = (sceneId: string, assetId: string) => {
+    try {
+      const updated = assignMediaToScene(journey, sceneId, assetId);
+      const asset = (journey.mediaLibrary ?? []).find((m) => m.id === assetId);
+      applyJourneyEdit(updated, `Attached ${asset?.filename ?? 'media'} to scene`);
+      showNotification(`Attached ${asset?.filename ?? 'media'} to scene`);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRemoveMediaFromScene = (sceneId: string, assetId: string) => {
+    try {
+      const updated = removeMediaFromScene(journey, sceneId, assetId);
+      applyJourneyEdit(updated, 'Removed media from scene');
+      showNotification('Removed media from scene');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAssignMediaToAudioTrack = (trackId: string, asset: MediaAsset) => {
+    try {
+      const updated = addMediaToAudioTrack(journey, trackId, asset, currentTime);
+      applyJourneyEdit(updated, `Added ${asset.filename} to audio timeline`);
+      showNotification(`Added ${asset.filename} to audio timeline`);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleUndo = () => {
@@ -1847,6 +1943,12 @@ export default function App() {
               onClick={() => setActiveTab('audio')}
             >
               🎵 Audio ({journey.audio?.tracks.reduce((acc, t) => acc + t.clips.length, 0) ?? 0})
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'media' ? 'active' : ''}`}
+              onClick={() => setActiveTab('media')}
+            >
+              🖼️ Media ({journey.mediaLibrary?.length ?? 0})
             </button>
             <button
               className={`tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
@@ -2859,6 +2961,19 @@ export default function App() {
                   ))
                 )}
               </div>
+            )}
+
+            {activeTab === 'media' && (
+              <MediaLibraryPanel
+                journey={journey}
+                onImportFiles={handleImportMediaFiles}
+                onDeleteAsset={handleDeleteMediaAsset}
+                onAssignToScene={handleAssignMediaToScene}
+                onAssignToAudioTrack={handleAssignMediaToAudioTrack}
+                onPreviewAsset={(asset) => setSelectedMediaForPreview(asset)}
+                isImporting={isImportingMedia}
+                importMessage={mediaImportMessage}
+              />
             )}
 
             {activeTab === 'export' && (
@@ -4067,10 +4182,39 @@ export default function App() {
                               targetSceneIdForMedia.current = scene.id;
                               sceneMediaInputRef.current?.click();
                             }}
-                            title="Attach photo to scene"
+                            title="Attach local photo or video to scene"
                           >
-                            📷 + Photo
+                            📷 + File
                           </button>
+
+                          {journey.mediaLibrary && journey.mediaLibrary.some((m) => m.type !== 'audio') && (
+                            <select
+                              style={{
+                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border-subtle)',
+                                color: '#38bdf8',
+                                fontSize: '10px',
+                                padding: '2px 4px',
+                                borderRadius: '3px',
+                                maxWidth: '90px',
+                              }}
+                              defaultValue=""
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  handleAssignMediaToScene(scene.id, e.target.value);
+                                  e.target.value = '';
+                                }
+                              }}
+                              title="Attach existing media from your Media Library"
+                            >
+                              <option value="" disabled>🖼️ Library</option>
+                              {journey.mediaLibrary.filter((m) => m.type !== 'audio').map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.title || m.filename} ({m.type.toUpperCase()})
+                                </option>
+                              ))}
+                            </select>
+                          )}
                         </div>
 
                         {/* Attached Media List */}
@@ -4101,8 +4245,8 @@ export default function App() {
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                   }}
-                                  onClick={() => handleRemoveMedia(med.id)}
-                                  title="Remove photo"
+                                  onClick={() => handleRemoveMediaFromScene(scene.id, med.id)}
+                                  title="Remove media from scene"
                                 >
                                   ×
                                 </button>
@@ -4518,6 +4662,18 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {selectedMediaForPreview && (
+        <MediaPreviewModal
+          asset={selectedMediaForPreview}
+          onClose={() => setSelectedMediaForPreview(null)}
+          scenes={(journey.timeline.scenes ?? []) as StoryScene[]}
+          audioTracks={journey.audio?.tracks ?? []}
+          onAssignToScene={handleAssignMediaToScene}
+          onAssignToAudioTrack={handleAssignMediaToAudioTrack}
+          onDeleteAsset={handleDeleteMediaAsset}
+        />
       )}
     </>
   );

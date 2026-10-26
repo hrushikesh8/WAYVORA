@@ -814,6 +814,145 @@ export function removeMedia(journey: Journey, mediaId: string): Journey {
   };
 }
 
+// ── Media Library Operations ──
+
+/**
+ * Adds an imported media asset to the journey's media library.
+ */
+export function addMediaToLibrary(journey: Journey, asset: MediaAsset): Journey {
+  const existing = journey.mediaLibrary ?? [];
+  const updatedLibrary = [...existing.filter((m) => m.id !== asset.id), asset];
+
+  return {
+    ...journey,
+    mediaLibrary: updatedLibrary,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Removes a media asset from the journey library and unlinks it from any scenes/stops.
+ */
+export function removeMediaFromLibrary(journey: Journey, assetId: string): Journey {
+  const existing = journey.mediaLibrary ?? [];
+  const updatedLibrary = existing.filter((m) => m.id !== assetId);
+
+  // Safely unlink from scenes without disturbing timing or transitions
+  const updatedScenes = ((journey.timeline.scenes ?? []) as StoryScene[]).map((sc) => ({
+    ...sc,
+    media: sc.media ? sc.media.filter((m) => m.id !== assetId) : [],
+  }));
+
+  // Safely unlink from stops
+  const updatedStops = journey.stops.map((st) => ({
+    ...st,
+    media: st.media ? st.media.filter((m) => m.id !== assetId) : [],
+  }));
+
+  return {
+    ...journey,
+    mediaLibrary: updatedLibrary,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    stops: updatedStops,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Assigns an existing library media asset to a story scene.
+ */
+export function assignMediaToScene(
+  journey: Journey,
+  sceneId: string,
+  assetId: string
+): Journey {
+  const library = journey.mediaLibrary ?? [];
+  const asset = library.find((m) => m.id === assetId);
+  if (!asset) {
+    throw new EditError(`Media asset "${assetId}" not found in journey library`);
+  }
+
+  return attachMediaToScene(journey, sceneId, asset);
+}
+
+/**
+ * Removes a specific media asset from a story scene.
+ */
+export function removeMediaFromScene(
+  journey: Journey,
+  sceneId: string,
+  assetId: string
+): Journey {
+  const existingScenes = (journey.timeline.scenes ?? []) as StoryScene[];
+  const sceneIndex = existingScenes.findIndex((s) => s.id === sceneId);
+  if (sceneIndex === -1) {
+    throw new EditError(`Scene not found with id: ${sceneId}`);
+  }
+
+  const targetScene = existingScenes[sceneIndex];
+  const updatedMedia = (targetScene.media ?? []).filter((m) => m.id !== assetId);
+
+  const updatedScenes = [...existingScenes];
+  updatedScenes[sceneIndex] = {
+    ...targetScene,
+    media: updatedMedia,
+  };
+
+  return {
+    ...journey,
+    timeline: {
+      ...journey.timeline,
+      scenes: updatedScenes,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Converts an audio media asset into an audio track clip.
+ */
+export function addMediaToAudioTrack(
+  journey: Journey,
+  trackId: string,
+  asset: MediaAsset,
+  startSeconds = 0
+): Journey {
+  if (asset.type !== 'audio') {
+    throw new EditError(`Cannot add non-audio asset "${asset.filename}" to an audio track`);
+  }
+
+  const audioTimeline = journey.audio ?? createDefaultAudioTimeline();
+  const track = audioTimeline.tracks.find((t) => t.id === trackId);
+  if (!track) {
+    throw new EditError(`Audio track "${trackId}" not found`);
+  }
+
+  const clip: AudioClip = {
+    id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    name: asset.title || asset.filename,
+    type: track.type === 'voiceover' ? 'voiceover' : 'music',
+    assetUrl: asset.url,
+    filename: asset.filename,
+    timelineStartSeconds: startSeconds,
+    sourceTrimInSeconds: 0,
+    durationSeconds: asset.durationSeconds && asset.durationSeconds > 0 ? asset.durationSeconds : 10,
+    volume: 1.0,
+    fadeInSeconds: 0,
+    fadeOutSeconds: 0,
+    metadata: {
+      title: asset.title,
+      sampleRate: 44100,
+      channelCount: 2,
+      sourceDurationSeconds: asset.durationSeconds,
+    },
+  };
+
+  return addAudioClip({ ...journey, audio: audioTimeline }, trackId, clip);
+}
+
 // ── Audio Timeline Operations ──
 
 import type { AudioClip, AudioTrack, AudioDuckingSettings } from './audio/types';

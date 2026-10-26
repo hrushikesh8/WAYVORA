@@ -5,7 +5,7 @@
    ─────────────────────────────────────────────────────────────────── */
 
 import { Muxer, ArrayBufferTarget, type MuxerOptions } from 'mp4-muxer';
-import type { Journey } from '../types';
+import type { Journey, MediaAsset } from '../types';
 import type {
   ExportJobConfig,
   ExportProgressCallback,
@@ -16,6 +16,42 @@ import { evaluateRenderFrame } from './contract';
 import { compositeRenderFrame } from './canvasCompositor';
 import { mixAudioPcm } from '../audio/mixer';
 import { prepareJourneyAudioBuffers } from '../audio/audioLoader';
+
+async function preloadMediaElements(journey: Journey): Promise<Map<string, HTMLImageElement>> {
+  const cache = new Map<string, HTMLImageElement>();
+  if (typeof window === 'undefined' || typeof Image === 'undefined') return cache;
+
+  const allMedia: MediaAsset[] = [];
+  if (journey.mediaLibrary) allMedia.push(...journey.mediaLibrary);
+  if (journey.timeline?.scenes) {
+    for (const sc of journey.timeline.scenes) {
+      if (sc.media) allMedia.push(...sc.media);
+    }
+  }
+
+  await Promise.all(
+    allMedia.map(async (m) => {
+      if (m.type === 'photo' && m.url && !cache.has(m.id)) {
+        try {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          await new Promise<void>((resolve) => {
+            img.onload = () => {
+              cache.set(m.id, img);
+              resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = m.url;
+          });
+        } catch {
+          // Ignore loading errors
+        }
+      }
+    })
+  );
+
+  return cache;
+}
 
 export function isWebCodecsSupported(): boolean {
   return (
@@ -336,6 +372,7 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
   }
 
   const usPerFrame = 1e6 / fps;
+  const mediaCache = await preloadMediaElements(journey);
 
   try {
     // 5. Render and encode video frames
@@ -362,10 +399,13 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
 
       // Obtain map snapshot if available
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
+      const activeAsset = frame.story.activeMedia?.[0];
+      const activeMediaElement = activeAsset ? mediaCache.get(activeAsset.id) : undefined;
 
       // Composite complete visual frame
       compositeRenderFrame(ctx, frame, {
         mapCanvas,
+        activeMediaElement,
         cinematicTreatment: config.cinematicTreatment,
         drawSafeAreaGuides: config.drawSafeAreaGuides,
         attributionText: config.attributionText,
@@ -560,6 +600,7 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
   };
 
   recorder.start();
+  const mediaCache = await preloadMediaElements(journey);
 
   try {
     for (let i = 0; i < totalFrames; i++) {
@@ -577,8 +618,12 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
       });
 
       const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
+      const activeAsset = frame.story.activeMedia?.[0];
+      const activeMediaElement = activeAsset ? mediaCache.get(activeAsset.id) : undefined;
+
       compositeRenderFrame(ctx, frame, {
         mapCanvas,
+        activeMediaElement,
         cinematicTreatment: config.cinematicTreatment,
         drawSafeAreaGuides: config.drawSafeAreaGuides,
         attributionText: config.attributionText,

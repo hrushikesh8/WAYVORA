@@ -109,12 +109,18 @@ export interface MediaAsset {
   attribution?: string;
   mimeType?: string;
   sizeBytes?: number;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
   geoPosition?: RoutePoint;
   timestamp?: string;
   cameraModel?: string;
   stopId?: string;
   sceneId?: string;
   isMissing?: boolean;
+  fingerprint?: string;
+  storageKey?: string;
+  createdAt?: string;
 }
 
 // ── Story & Scenes ──
@@ -291,6 +297,7 @@ export interface Journey {
   timeline: Timeline;
   exportProfiles: ExportProfile[];
   audio?: AudioTimeline;
+  mediaLibrary?: MediaAsset[];
 }
 
 // ── Project file format ──
