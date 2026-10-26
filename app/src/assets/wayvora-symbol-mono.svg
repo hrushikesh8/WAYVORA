@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Container Outline -->
+  <rect x="24" y="24" width="464" height="464" rx="100" stroke="currentColor" stroke-width="12" fill="none" opacity="0.9" />
+
+  <!-- Sun Circle -->
+  <circle cx="256" cy="180" r="76" stroke="currentColor" stroke-width="10" fill="none" opacity="0.5" />
+
+  <!-- Mountain Horizon -->
+  <path d="M 24 280 L 125 160 L 210 220 L 256 205 L 302 220 L 387 160 L 488 280" stroke="currentColor" stroke-width="8" fill="none" opacity="0.35" />
+
+  <!-- W-Shaped Continuous Road Ribbon -->
+  <path d="M 45 214 C 76 190, 114 218, 134 266 C 154 316, 172 388, 214 406 C 234 414, 252 400, 260 372 C 270 342, 258 290, 274 262 C 286 242, 304 235, 320 244"
+        stroke="currentColor" stroke-width="20" stroke-linecap="round" fill="none" />
+  <path d="M 250 216 C 240 230, 238 248, 246 264 C 258 288, 280 308, 306 335 C 330 362, 348 388, 368 405 C 382 418, 404 416, 420 392 C 442 358, 460 304, 490 224"
+        stroke="currentColor" stroke-width="20" stroke-linecap="round" fill="none" />
+</svg>
