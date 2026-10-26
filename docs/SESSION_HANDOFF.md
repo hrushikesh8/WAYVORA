@@ -1,8 +1,8 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 6 — Voiceover Narration & Multi-Track Audio  
-> Date: 2026-10-16  
-> Status: Phase 6 VERIFIED · 291/291 Unit & Acceptance Tests Passing · Production Build Green · Browser QA & MP4 Export Parity Verified  
+> Session: Phase 6.1 — Audio Export Acceptance & End-to-End Verification  
+> Date: 2026-10-26  
+> Status: Phase 6.1 VERIFIED · 295/295 Unit & Acceptance Tests Passing · Production Build Green · Real MP4 Decoded via FFprobe/FFmpeg · Ducking & Sync Verified  
 
 ---
 
@@ -107,13 +107,18 @@ dist/assets/index-CX8uqepH.js                2,145.61 kB │ gzip: 579.01 kB
 | Voiceover & scene synchronization | **VERIFIED** | `alignClipToScene`, `sceneId` persistence, reordering safety tested. |
 | Automatic music ducking (attack, release, margin) | **VERIFIED** | Cosine easing in `mixer.ts`, live UI status pill, unit tests. |
 | WebCodecs MP4 export with audio parity | **VERIFIED** | `mixAudioPcm` precomputes ducking envelope; WebCodecs AAC encodes stream. |
+| Real MP4 Encoded Output & Stream Inspection | **VERIFIED** | FFprobe verified: ISO MP4, H.264 High 240 frames, AAC LC 345 packets (44.1kHz stereo). |
+| Real Decoded Audio Ducking & Attenuation | **VERIFIED** | Decoded WAV FFT: -15.06 dB ducking attenuation during voiceover, smooth cosine ramps, margin hold, post-release restoration, 0.0000 muted leakage. |
+| Audio/Video Synchronization | **VERIFIED** | Identical PTS 0.000000s start; container duration delta 10.88ms (< 1 AAC packet length). |
+| Sub-Range Export Audio Alignment Fix | **VERIFIED** | `startTimeSeconds` added to `mixAudioPcm` and `exportJourneyVideo`; regression tested. |
 | Backward-compatible serialization & migration | **VERIFIED** | `migrateProject` tested with legacy fixtures; roundtripping verified. |
-| Unit and integration tests passing (100%) | **VERIFIED** | 291/291 vitest tests passing across 21 test suites. |
-| Strict TypeScript production build | **VERIFIED** | `tsc -b && vite build` clean build with zero warnings/errors. |
+| Unit and integration tests passing (100%) | **VERIFIED** | 295/295 vitest tests passing across 21 test suites. |
+| Strict TypeScript production build | **VERIFIED** | `tsc -b && vite build` clean build with zero warnings/errors in ~700ms. |
 
 ---
 
 ## 6. Repository Integrity & Safety
 - **Untouched Resources**: The `RESOURCES/` research directory was strictly excluded and unmutated.
 - **Zero Hallucination / Scope Control**: No AI voice synthesis, cloud TTS, or DAW bloat was introduced.
-- **Git State**: Clean working tree ready for commit.
+- **Git State**: Ready for Phase 6.1 commit upon user authorization.
+

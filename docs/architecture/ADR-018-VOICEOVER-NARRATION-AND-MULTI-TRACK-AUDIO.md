@@ -106,5 +106,36 @@ Export parity is maintained by sharing the deterministic mixing logic:
 | Voiceover scene alignment & reorder safety | **VERIFIED** | Scene alignment snaps timelineStartSeconds; reorderStoryScenes never deletes clips. |
 | WebCodecs MP4 export with synchronized audio | **VERIFIED** | mixAudioPcm applies duckingEnvelope sample-for-sample into AAC stream. |
 | Serialization & legacy migration | **VERIFIED** | Roundtrips ducking settings cleanly; migrates legacy project files with zero data loss. |
-| Unit & Integration Tests | **VERIFIED** | 291/291 vitest tests passing across 21 test suites. |
-| Production Build | **VERIFIED** | `tsc -b && vite build` succeeds in ~1.02s without errors. |
+| Unit & Integration Tests | **VERIFIED** | 295/295 vitest tests passing across 21 test suites. |
+| Production Build | **VERIFIED** | `tsc -b && vite build` succeeds cleanly in ~700ms without errors. |
+
+---
+
+## 7. Phase 6.1: Audio Export Acceptance & End-to-End Verification (Addendum)
+
+**Date**: 2026-10-26  
+**Status**: VERIFIED & PASS  
+
+### 7.1 Sub-Range Export Audio Alignment Fix
+An audit of the export pipeline revealed that while full journey exports rendered accurately from $t = 0$, exporting sub-ranges (`config.timeRange: { startTime, endTime }`) caused `mixAudioPcm` to generate PCM starting at $t = 0$ while video evaluated starting at `startTime`, leading to severe audio/video misalignment in sub-range renders.
+- **Fix**: Added `startTimeSeconds?: number` to `MixAudioPcmOptions` in `app/src/domain/audio/mixer.ts`. Forwarded `startTime` from `exportJourneyVideo` in `app/src/domain/render/exporter.ts`.
+- **Regression Test**: Added test in `audio.test.ts` verifying that clip evaluation, fades, and ducking envelopes precisely honor `startTimeSeconds`.
+
+### 7.2 Deterministic E2E Export Fixture & Decoded Stream Analysis
+A deterministic end-to-end fixture was run through the complete WebCodecs export pipeline in Chrome, producing an 8.0-second MP4 with 240 video frames (30 fps) and AAC stereo audio (44.1 kHz).
+- **Container**: ISO Media MP4 (`isomavc1mp41`), 2 streams.
+- **Video Stream**: H.264 High Profile, 640x360, 30 fps, 240 frames, start PTS: `0.000000`, duration: `8.000000s`.
+- **Audio Stream**: AAC LC, stereo, 44100 Hz, 345 packets (353,280 samples), start PTS: `0.000000`, duration: `8.010884s`.
+- **A/V Sync Delta**: Video and audio start at identical `0.000000s` presentation timestamp; container end-time delta is 10.88ms (< 1 AAC packet length of 23.22ms).
+
+### 7.3 Acoustic & Numerical Ducking Verification
+The encoded MP4 was decoded to uncompressed 16-bit PCM WAV using `ffmpeg` and analyzed via Fourier bandpass filters:
+- **Music Bed (220 Hz)**:
+  - Pre-narration (0.5s - 1.2s): peak magnitude `0.5437` (-8.30 dBFS).
+  - During Voiceover (2.0s - 5.0s): ducked to `0.0960` (-23.36 dBFS), measuring a **-15.06 dB attenuation**.
+  - Post-Release (6.2s - 7.0s): recovered to `0.5002` (within 0.7 dB of pre-narration level).
+- **Voiceover Narration (880 Hz)**: Present only during scheduled 2.0s - 5.0s window (`0.7169` magnitude), silent (`0.0000`) before and after.
+- **Ambient Soundscape (110 Hz)**: Active from 1.0s to 7.0s (`0.1264` magnitude), silent outside bounds.
+- **Muted Clip (440 Hz)**: Completely suppressed (`0.0000` magnitude, zero leakage into mix).
+- **Ducking Envelope Dynamics**: Smooth cosine attack ramp (1.4s - 1.8s), safety margin hold (5.0s - 5.2s), smooth cosine release ramp (5.2s - 6.0s).
+

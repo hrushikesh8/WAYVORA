@@ -392,6 +392,7 @@ export interface DecodedAudioBuffer {
 
 export interface MixAudioPcmOptions {
   durationSeconds: number;
+  startTimeSeconds?: number;
   sampleRate?: number;
   timeline: AudioTimeline;
   /** Source PCM buffers keyed by clip.assetUrl or clip.id */
@@ -412,6 +413,8 @@ export function mixAudioPcm(options: MixAudioPcmOptions): {
 } {
   const sampleRate = options.sampleRate || options.timeline.sampleRate || 44100;
   const duration = Math.max(0, options.durationSeconds);
+  const startTime = Math.max(0, options.startTimeSeconds ?? 0);
+  const endTime = startTime + duration;
   const totalSamples = Math.ceil(duration * sampleRate);
 
   const leftChannel = new Float32Array(totalSamples);
@@ -433,7 +436,8 @@ export function mixAudioPcm(options: MixAudioPcmOptions): {
   const duckingEnvelope = new Float32Array(totalSamples);
   if (options.timeline.ducking?.enabled !== false && options.timeline.ducking) {
     for (let i = 0; i < totalSamples; i++) {
-      duckingEnvelope[i] = calculateDuckingGainAtTime(options.timeline, i / sampleRate);
+      const timelineTime = startTime + i / sampleRate;
+      duckingEnvelope[i] = calculateDuckingGainAtTime(options.timeline, timelineTime);
     }
   } else {
     duckingEnvelope.fill(1.0);
@@ -461,18 +465,20 @@ export function mixAudioPcm(options: MixAudioPcmOptions): {
       const clipStart = clip.timelineStartSeconds;
       const clipEnd = clipStart + clip.durationSeconds;
 
-      // Check overlap with the export timeline window [0, duration]
-      if (clipEnd <= 0 || clipStart >= duration) continue;
+      // Check overlap with the export timeline window [startTime, endTime]
+      if (clipEnd <= startTime || clipStart >= endTime) continue;
 
-      const startSample = Math.max(0, Math.floor(clipStart * sampleRate));
-      const endSample = Math.min(totalSamples, Math.ceil(clipEnd * sampleRate));
+      const relStart = clipStart - startTime;
+      const relEnd = clipEnd - startTime;
+      const startSample = Math.max(0, Math.floor(relStart * sampleRate));
+      const endSample = Math.min(totalSamples, Math.ceil(relEnd * sampleRate));
 
       const srcRate = source.sampleRate;
       const srcTrimSec = clip.sourceTrimInSeconds;
 
       for (let i = startSample; i < endSample; i++) {
-        const t = i / sampleRate;
-        const localTime = t - clipStart;
+        const timelineTime = startTime + i / sampleRate;
+        const localTime = timelineTime - clipStart;
         const duckFactor = isMusicTrack ? duckingEnvelope[i] : 1.0;
         const gain = calculateClipGain(clip, localTime) * trackVol * masterVol * duckFactor;
 

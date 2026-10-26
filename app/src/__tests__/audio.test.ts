@@ -732,6 +732,100 @@ describe('Audio Domain & Deterministic Mixer', () => {
         4
       );
     });
+
+    it('accurately offsets timeline clips and ducking envelope when startTimeSeconds is provided', () => {
+      const sampleRate = 44100;
+      // Journey total duration 10s. Export sub-range from t = 4s to t = 8s (duration = 4s)
+      const musicSrc = synthesizeAudioTone({ durationSeconds: 10.0, sampleRate, frequencyHz: 220, style: 'sine-tone', gain: 1.0 });
+      const voSrc = synthesizeAudioTone({ durationSeconds: 2.0, sampleRate, frequencyHz: 880, style: 'sine-tone', gain: 1.0 });
+
+      const timeline: AudioTimeline = {
+        sampleRate,
+        channelCount: 2,
+        masterVolume: 1.0,
+        ducking: {
+          enabled: true,
+          attenuation: 0.25,
+          attackSeconds: 0.4,
+          releaseSeconds: 0.4,
+          marginSeconds: 0.1,
+        },
+        tracks: [
+          {
+            id: 't-music',
+            name: 'Music',
+            type: 'music',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-music',
+                name: 'Full Music',
+                type: 'music',
+                assetUrl: 'src-music',
+                timelineStartSeconds: 0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 10.0,
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+          {
+            id: 't-vo',
+            name: 'Voiceover',
+            type: 'voiceover',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-vo',
+                name: 'VO at 5s',
+                type: 'voiceover',
+                assetUrl: 'src-vo',
+                timelineStartSeconds: 5.0, // starts at 5s on journey timeline
+                sourceTrimInSeconds: 0,
+                durationSeconds: 2.0, // ends at 7s
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      const sourceBuffers = new Map([
+        ['src-music', { left: musicSrc.left, right: musicSrc.right, sampleRate, durationSeconds: 10.0 }],
+        ['src-vo', { left: voSrc.left, right: voSrc.right, sampleRate, durationSeconds: 2.0 }],
+      ]);
+
+      const subrangeMix = mixAudioPcm({
+        startTimeSeconds: 4.0, // export sub-range [4.0s, 8.0s]
+        durationSeconds: 4.0,
+        sampleRate,
+        timeline,
+        sourceBuffers,
+      });
+
+      expect(subrangeMix.leftChannel.length).toBe(4 * sampleRate);
+
+      // In the exported 4s buffer:
+      // t_export = 0s corresponds to t_journey = 4.0s (before ducking attack at 4.5s)
+      // VO starts at t_journey = 5.0s => t_export = 1.0s
+      // VO ends at t_journey = 7.0s => t_export = 3.0s
+      // t_export = 0.2s is at t_journey = 4.2s (before ducking attack at 4.5s)
+      const sampleAt0_2 = Math.floor(0.2 * sampleRate);
+      const expectedMusicSampleAt4_2 = musicSrc.left[Math.floor(4.2 * sampleRate)];
+      expect(subrangeMix.leftChannel[sampleAt0_2]).toBeCloseTo(expectedMusicSampleAt4_2, 3);
+
+      // At t_export = 1.5s (t_journey = 5.5s): VO is active, music is attenuated to 0.25
+      const sampleAt1_5 = Math.floor(1.5 * sampleRate);
+      const expectedVoSample = voSrc.left[Math.floor(0.5 * sampleRate)];
+      const expectedDuckedMusicSample = musicSrc.left[Math.floor(5.5 * sampleRate)] * 0.25;
+      expect(subrangeMix.leftChannel[sampleAt1_5]).toBeCloseTo(expectedVoSample + expectedDuckedMusicSample, 2);
+    });
   });
 
   describe('Phase 6: Voiceover Scene Alignment & Deletion Non-Destructiveness', () => {
@@ -917,6 +1011,182 @@ describe('Audio Domain & Deterministic Mixer', () => {
 
       expect(loaded.audio).toBeDefined();
       expect(loaded.audio?.tracks.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('Phase 6.1: Audio Export Acceptance & Regression Pipeline', () => {
+    it('verifies deterministic multi-track PCM mixing with source trims, fades, and zero leakage from muted clips', () => {
+      const sampleRate = 44100;
+      const durationSeconds = 5.0;
+
+      // 10s source tone for music with distinct linear progression
+      const musicSrc = synthesizeAudioTone({ durationSeconds: 10.0, sampleRate, frequencyHz: 220, style: 'sine-tone', gain: 1.0 });
+      // 440Hz tone on a muted clip
+      const mutedSrc = synthesizeAudioTone({ durationSeconds: 3.0, sampleRate, frequencyHz: 440, style: 'sine-tone', gain: 1.0 });
+
+      const timeline: AudioTimeline = {
+        sampleRate,
+        channelCount: 2,
+        masterVolume: 1.0,
+        tracks: [
+          {
+            id: 't-music',
+            name: 'Music',
+            type: 'music',
+            volume: 0.8,
+            muted: false,
+            clips: [
+              {
+                id: 'c-music',
+                name: 'Music with trim',
+                type: 'music',
+                assetUrl: 'src-music',
+                timelineStartSeconds: 0,
+                sourceTrimInSeconds: 1.5, // 1.5s trim
+                durationSeconds: 5.0,
+                volume: 1.0,
+                fadeInSeconds: 0.5,
+                fadeOutSeconds: 0.5,
+              },
+              {
+                id: 'c-muted',
+                name: 'Muted Clip',
+                type: 'music',
+                assetUrl: 'src-muted',
+                timelineStartSeconds: 1.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 2.0,
+                volume: 1.0,
+                muted: true, // MUST NOT BE IN MIX
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      const sourceBuffers = new Map([
+        ['src-music', { left: musicSrc.left, right: musicSrc.right, sampleRate, durationSeconds: 10.0 }],
+        ['src-muted', { left: mutedSrc.left, right: mutedSrc.right, sampleRate, durationSeconds: 3.0 }],
+      ]);
+
+      const mixed = mixAudioPcm({
+        durationSeconds,
+        sampleRate,
+        timeline,
+        sourceBuffers,
+      });
+
+      expect(mixed.leftChannel.length).toBe(5 * sampleRate);
+
+      // Verify trim-in at t = 2.0s:
+      // Local time in clip = 2.0s. With trim = 1.5s, source time is 3.5s!
+      const sampleAt2 = Math.floor(2.0 * sampleRate);
+      const expectedSrcIdx = Math.floor(3.5 * sampleRate);
+      const expectedVal = musicSrc.left[expectedSrcIdx] * 0.8;
+      expect(mixed.leftChannel[sampleAt2]).toBeCloseTo(expectedVal, 3);
+
+      // Verify fade-in: at t = 0.25s (half of 0.5s fade-in), gain should be sin(0.5 * pi/2) * 0.8 ≈ 0.5656
+      const sampleAtFade = Math.floor(0.25 * sampleRate);
+      const srcIdxAtFade = Math.floor((1.5 + 0.25) * sampleRate);
+      const fadeFactor = Math.sin((0.25 / 0.5) * (Math.PI / 2));
+      expect(mixed.leftChannel[sampleAtFade]).toBeCloseTo(musicSrc.left[srcIdxAtFade] * 0.8 * fadeFactor, 3);
+
+      // Verify muted clip: check that during t = 1.0s .. 3.0s, no 440Hz component exists
+      let dftReal440 = 0;
+      let dftImag440 = 0;
+      const startIdx = Math.floor(1.2 * sampleRate);
+      const endIdx = Math.floor(2.8 * sampleRate);
+      const N = endIdx - startIdx;
+      const omega = (2 * Math.PI * 440.0) / sampleRate;
+      for (let i = 0; i < N; i++) {
+        const s = mixed.leftChannel[startIdx + i];
+        dftReal440 += s * Math.cos(omega * i);
+        dftImag440 += s * Math.sin(omega * i);
+      }
+      const mag440 = (2 * Math.sqrt(dftReal440 * dftReal440 + dftImag440 * dftImag440)) / N;
+      expect(mag440).toBeLessThan(0.001); // 440Hz is completely absent
+    });
+
+    it('verifies audio and video duration alignment and timestamp pacing', () => {
+      const fps = 30;
+      const sampleRate = 44100;
+      const durationSeconds = 8.0;
+
+      const totalVideoFrames = Math.ceil(durationSeconds * fps); // 240
+      const totalAudioSamples = Math.ceil(durationSeconds * sampleRate); // 352800
+
+      const usPerFrame = 1e6 / fps;
+      const audioChunkFrames = 1024;
+      const totalAudioChunks = Math.ceil(totalAudioSamples / audioChunkFrames); // 345
+
+      // Video end timestamp:
+      const videoEndUs = (totalVideoFrames - 1) * usPerFrame + usPerFrame;
+      expect(videoEndUs).toBe(8_000_000); // exactly 8.0s
+
+      // Audio packet presentation timestamps:
+      let lastAudioUs = 0;
+      for (let offset = 0; offset < totalAudioSamples; offset += audioChunkFrames) {
+        const ptsUs = Math.round((offset / sampleRate) * 1e6);
+        expect(ptsUs).toBeGreaterThanOrEqual(lastAudioUs);
+        lastAudioUs = ptsUs;
+      }
+
+      // Audio duration delta vs video duration:
+      const audioDurationSeconds = (totalAudioChunks * audioChunkFrames) / sampleRate;
+      const syncDeltaSeconds = Math.abs(audioDurationSeconds - durationSeconds);
+      // AAC packet duration is 1024 / 44100 ≈ 0.02322s. Synchronization delta must be within 1 packet!
+      expect(syncDeltaSeconds).toBeLessThan(0.025);
+    });
+
+    it('verifies ducking envelope zero-attack and zero-release resilience', () => {
+      const timeline: AudioTimeline = {
+        sampleRate: 44100,
+        channelCount: 2,
+        masterVolume: 1.0,
+        ducking: {
+          enabled: true,
+          attenuation: 0.1,
+          attackSeconds: 0.0,
+          releaseSeconds: 0.0,
+          marginSeconds: 0.0,
+        },
+        tracks: [
+          {
+            id: 't-vo',
+            name: 'Voiceover',
+            type: 'voiceover',
+            volume: 1.0,
+            muted: false,
+            clips: [
+              {
+                id: 'c-vo',
+                name: 'Instant VO',
+                type: 'voiceover',
+                assetUrl: 'src',
+                timelineStartSeconds: 2.0,
+                sourceTrimInSeconds: 0,
+                durationSeconds: 2.0, // 2s to 4s
+                volume: 1.0,
+                fadeInSeconds: 0,
+                fadeOutSeconds: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      // Before VO: exactly 1.0
+      expect(calculateDuckingGainAtTime(timeline, 1.99)).toBe(1.0);
+      // At VO start: instantly 0.1
+      expect(calculateDuckingGainAtTime(timeline, 2.0)).toBe(0.1);
+      // During VO: 0.1
+      expect(calculateDuckingGainAtTime(timeline, 3.0)).toBe(0.1);
+      // At VO end: 0.1
+      expect(calculateDuckingGainAtTime(timeline, 4.0)).toBe(0.1);
+      // Immediately after VO: 1.0
+      expect(calculateDuckingGainAtTime(timeline, 4.01)).toBe(1.0);
     });
   });
 });

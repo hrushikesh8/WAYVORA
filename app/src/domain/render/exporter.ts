@@ -258,6 +258,7 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
           if (aacCodec) {
             mixedAudio = mixAudioPcm({
               durationSeconds: duration,
+              startTimeSeconds: startTime,
               sampleRate,
               timeline: journey.audio,
               sourceBuffers,
