@@ -16,6 +16,8 @@ import {
 export interface ComposeFrameOptions {
   /** Optional background image or canvas from MapLibre GL */
   mapCanvas?: HTMLCanvasElement | ImageBitmap | null;
+  /** Whether mapCanvas is strictly required (throws rather than drawing silent fallback gradient) */
+  requireMapCanvas?: boolean;
   /** Whether to draw the subtle technical HUD (timecode, speed, elevation) */
   drawHud?: boolean;
   /** Pre-loaded HTMLImageElement or HTMLVideoElement for active media */
@@ -94,11 +96,23 @@ export function compositeRenderFrame(
 
   // 2. Draw map background or cinematic fallback gradient
   if (options?.mapCanvas) {
-    try {
-      ctx.drawImage(options.mapCanvas, 0, 0, width, height);
-    } catch {
+    if (options.mapCanvas.width === 0 || options.mapCanvas.height === 0) {
+      if (options.requireMapCanvas) {
+        throw new Error(`mapCanvas has invalid zero dimensions: ${options.mapCanvas.width}x${options.mapCanvas.height}`);
+      }
       drawFallbackBackground(ctx, width, height);
+    } else {
+      try {
+        ctx.drawImage(options.mapCanvas, 0, 0, width, height);
+      } catch (err) {
+        if (options.requireMapCanvas) {
+          throw new Error(`Failed to draw mapCanvas to context: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        drawFallbackBackground(ctx, width, height);
+      }
     }
+  } else if (options?.requireMapCanvas) {
+    throw new Error('Required map canvas was missing or null in compositeRenderFrame');
   } else {
     drawFallbackBackground(ctx, width, height);
   }
@@ -786,3 +800,124 @@ function drawRoundedRect(
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
+
+export interface FramePixelValidationResult {
+  isValid: boolean;
+  reason?: string;
+  details?: {
+    sampledPixels: number;
+    nonZeroAlphaPixels: number;
+    averageLuminance: number;
+    maxLuminance: number;
+    isCompletelyTransparent: boolean;
+    isCompletelyBlack: boolean;
+  };
+}
+
+/**
+ * Inspects canvas pixel output to verify that a frame contains actual rendered content,
+ * distinguishing legitimate dark scenes from genuinely failed, blank, or black frames.
+ */
+export function validateRenderedFramePixels(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  context?: {
+    hasMapCanvas?: boolean;
+    isTransitioning?: boolean;
+    isTitleCard?: boolean;
+  }
+): FramePixelValidationResult {
+  if (width <= 0 || height <= 0) {
+    return {
+      isValid: false,
+      reason: `Invalid canvas dimensions: ${width}x${height}`,
+    };
+  }
+
+  // Gracefully pass in Node/Vitest mock environments where getImageData is stubbed or unavailable
+  if (typeof ctx.getImageData !== 'function') {
+    return { isValid: true };
+  }
+
+  try {
+    const sampleCols = Math.min(24, width);
+    const sampleRows = Math.min(24, height);
+    const stepX = Math.max(1, Math.floor(width / sampleCols));
+    const stepY = Math.max(1, Math.floor(height / sampleRows));
+
+    let sampledPixels = 0;
+    let nonZeroAlphaPixels = 0;
+    let totalLuminance = 0;
+    let maxLuminance = 0;
+
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData?.data;
+    if (!data || data.length === 0) {
+      return { isValid: true };
+    }
+
+    for (let r = 0; r < sampleRows; r++) {
+      const y = Math.min(height - 1, r * stepY);
+      for (let c = 0; c < sampleCols; c++) {
+        const x = Math.min(width - 1, c * stepX);
+        const idx = (y * width + x) * 4;
+        const red = data[idx] ?? 0;
+        const green = data[idx + 1] ?? 0;
+        const blue = data[idx + 2] ?? 0;
+        const alpha = data[idx + 3] ?? 0;
+
+        sampledPixels++;
+        if (alpha > 0) {
+          nonZeroAlphaPixels++;
+        }
+        // ITU-R BT.709 relative luminance
+        const lum = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        totalLuminance += lum;
+        if (lum > maxLuminance) {
+          maxLuminance = lum;
+        }
+      }
+    }
+
+    const avgLuminance = sampledPixels > 0 ? totalLuminance / sampledPixels : 0;
+    const isCompletelyTransparent = nonZeroAlphaPixels === 0;
+    const isCompletelyBlack = maxLuminance < 1;
+
+    const details = {
+      sampledPixels,
+      nonZeroAlphaPixels,
+      averageLuminance: avgLuminance,
+      maxLuminance,
+      isCompletelyTransparent,
+      isCompletelyBlack,
+    };
+
+    if (isCompletelyTransparent) {
+      return {
+        isValid: false,
+        reason: 'Canvas is completely transparent (all sampled pixels have alpha = 0)',
+        details,
+      };
+    }
+
+    if (isCompletelyBlack) {
+      // If not intentionally in the middle of a full fade-to-black transition,
+      // a completely black frame represents an unrendered or failed frame.
+      if (!context?.isTransitioning) {
+        return {
+          isValid: false,
+          reason: 'Canvas is completely black (zero luminance across all sampled pixels)',
+          details,
+        };
+      }
+    }
+
+    return { isValid: true, details };
+  } catch (err) {
+    // If getImageData throws due to tainted cross-origin asset, log warning and allow export
+    console.warn('[validateRenderedFramePixels] Pixel inspection warning:', err);
+    return { isValid: true };
+  }
+}
+

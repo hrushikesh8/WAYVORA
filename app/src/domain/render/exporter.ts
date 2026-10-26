@@ -13,10 +13,31 @@ import type {
   RenderFrame,
 } from './types';
 import { evaluateRenderFrame } from './contract';
-import { compositeRenderFrame } from './canvasCompositor';
+import { compositeRenderFrame, validateRenderedFramePixels } from './canvasCompositor';
 import { mixAudioPcm } from '../audio/mixer';
 import { prepareJourneyAudioBuffers } from '../audio/audioLoader';
-import { prepareVideoSeekers, cleanupVideoSeekers } from './videoSeeker';
+import { prepareVideoSeekers, cleanupVideoSeekers, type VideoFrameSeeker } from './videoSeeker';
+
+export class RenderingError extends Error {
+  public readonly frameIndex?: number;
+  public readonly timestampSeconds?: number;
+  public readonly diagnosticDetails?: Record<string, unknown>;
+
+  constructor(
+    message: string,
+    details?: {
+      frameIndex?: number;
+      timestampSeconds?: number;
+      diagnosticDetails?: Record<string, unknown>;
+    }
+  ) {
+    super(message);
+    this.name = 'RenderingError';
+    this.frameIndex = details?.frameIndex;
+    this.timestampSeconds = details?.timestampSeconds;
+    this.diagnosticDetails = details?.diagnosticDetails;
+  }
+}
 
 async function preloadMediaElements(journey: Journey): Promise<Map<string, HTMLImageElement>> {
   const cache = new Map<string, HTMLImageElement>();
@@ -247,6 +268,101 @@ interface WebCodecsPipelineArgs {
   startTimeMs: number;
 }
 
+interface FirstFrameValidationResult {
+  frame0: RenderFrame;
+  mapCanvas0: HTMLCanvasElement | ImageBitmap | null;
+  activeMedia0?: CanvasImageSource;
+}
+
+async function validateAndPrepareFirstFrame(args: {
+  journey: Journey;
+  config: ExportJobConfig;
+  startTime: number;
+  fps: number;
+  ctx: CanvasRenderingContext2D;
+  getMapCanvas?: (frame: RenderFrame) => Promise<HTMLCanvasElement | ImageBitmap | null>;
+  videoSeekers: Map<string, VideoFrameSeeker>;
+  mediaCache: Map<string, HTMLImageElement>;
+}): Promise<FirstFrameValidationResult> {
+  const { journey, config, startTime, fps, ctx, getMapCanvas, videoSeekers, mediaCache } = args;
+
+  const frame0 = evaluateRenderFrame(journey, startTime, {
+    width: config.width,
+    height: config.height,
+    fps,
+    aspectRatio: config.aspectRatio,
+  });
+
+  let mapCanvas0: HTMLCanvasElement | ImageBitmap | null = null;
+  if (getMapCanvas) {
+    try {
+      mapCanvas0 = await getMapCanvas(frame0);
+      if (!mapCanvas0) {
+        throw new RenderingError('Initial map canvas provider returned null or unready canvas', {
+          frameIndex: 0,
+          timestampSeconds: startTime,
+        });
+      }
+      if (mapCanvas0.width === 0 || mapCanvas0.height === 0) {
+        throw new RenderingError(
+          `Initial map canvas has zero dimensions: ${mapCanvas0.width}x${mapCanvas0.height}`,
+          { frameIndex: 0, timestampSeconds: startTime }
+        );
+      }
+    } catch (err) {
+      if (err instanceof RenderingError) throw err;
+      throw new RenderingError(
+        `First frame map rendering failed: ${err instanceof Error ? err.message : String(err)}`,
+        { frameIndex: 0, timestampSeconds: startTime }
+      );
+    }
+  }
+
+  let activeMedia0: CanvasImageSource | undefined = undefined;
+  const asset0 = frame0.story.activeMedia?.[0];
+  if (asset0) {
+    if (asset0.type === 'video') {
+      const seeker = videoSeekers.get(asset0.id);
+      if (seeker) {
+        const sceneStart = frame0.story.activeScene?.startTime ?? (frame0.isDwelling ? frame0.timestampSeconds : 0);
+        const mediaTime = Math.max(0, startTime - sceneStart);
+        const videoEl = await seeker.seekTo(mediaTime);
+        if (videoEl) activeMedia0 = videoEl;
+      }
+    } else if (asset0.type === 'photo') {
+      activeMedia0 = mediaCache.get(asset0.id);
+    }
+  }
+
+  compositeRenderFrame(ctx, frame0, {
+    mapCanvas: mapCanvas0,
+    requireMapCanvas: Boolean(getMapCanvas),
+    activeMediaElement: activeMedia0,
+    cinematicTreatment: config.cinematicTreatment,
+    drawSafeAreaGuides: config.drawSafeAreaGuides,
+    attributionText: config.attributionText,
+  });
+
+  const check = validateRenderedFramePixels(ctx, config.width, config.height, {
+    hasMapCanvas: Boolean(mapCanvas0),
+    isTransitioning: Boolean(frame0.story.transition),
+    isTitleCard: Boolean(frame0.story.activeTitleCard),
+  });
+
+  if (!check.isValid) {
+    throw new RenderingError(
+      `First frame validation failed: ${check.reason}. The initial frame rendered blank or black.`,
+      {
+        frameIndex: 0,
+        timestampSeconds: startTime,
+        diagnosticDetails: check.details,
+      }
+    );
+  }
+
+  return { frame0, mapCanvas0, activeMedia0 };
+}
+
 async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportResult> {
   const {
     journey,
@@ -377,7 +493,29 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
   const videoSeekers = await prepareVideoSeekers(journey);
 
   try {
-    // 5. Render and encode video frames
+    // 5. Pre-flight First-Frame Rendering & Pixel Validation Gate
+    onProgress?.({
+      currentFrame: 0,
+      totalFrames,
+      percent: 0,
+      phase: 'preparing',
+      elapsedMs: Math.round(performance.now() - startTimeMs),
+      estimatedRemainingMs: 0,
+      message: 'Validating initial frame rendering readiness...',
+    });
+
+    await validateAndPrepareFirstFrame({
+      journey,
+      config,
+      startTime,
+      fps,
+      ctx,
+      getMapCanvas,
+      videoSeekers,
+      mediaCache,
+    });
+
+    // 6. Render and encode video frames
     for (let i = 0; i < totalFrames; i++) {
       if (abortSignal?.aborted) {
         videoEncoder.close();
@@ -392,42 +530,72 @@ async function renderWithWebCodecs(args: WebCodecsPipelineArgs): Promise<ExportR
       }
 
       const timeSeconds = startTime + i / fps;
-      const frame = evaluateRenderFrame(journey, timeSeconds, {
-        width: config.width,
-        height: config.height,
-        fps,
-        aspectRatio: config.aspectRatio,
-      });
 
-      // Obtain map snapshot if available
-      const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
-      const activeAsset = frame.story.activeMedia?.[0];
-      let activeMediaElement: CanvasImageSource | undefined = undefined;
+      // Frame 0 was already composited and validated in pre-flight gate.
+      // Re-composite for all subsequent frames (i > 0).
+      if (i > 0) {
+        const frame = evaluateRenderFrame(journey, timeSeconds, {
+          width: config.width,
+          height: config.height,
+          fps,
+          aspectRatio: config.aspectRatio,
+        });
 
-      if (activeAsset) {
-        if (activeAsset.type === 'video') {
-          const seeker = videoSeekers.get(activeAsset.id);
-          if (seeker) {
-            const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
-            const mediaTime = Math.max(0, timeSeconds - sceneStart);
-            const videoEl = await seeker.seekTo(mediaTime);
-            if (videoEl) {
-              activeMediaElement = videoEl;
+        // Obtain map snapshot if available
+        let mapCanvas: HTMLCanvasElement | ImageBitmap | null = null;
+        if (getMapCanvas) {
+          try {
+            mapCanvas = await getMapCanvas(frame);
+            if (!mapCanvas) {
+              throw new RenderingError(`Map canvas provider returned null for frame ${i} (t=${timeSeconds.toFixed(3)}s)`, {
+                frameIndex: i,
+                timestampSeconds: timeSeconds,
+              });
             }
+            if (mapCanvas.width === 0 || mapCanvas.height === 0) {
+              throw new RenderingError(`Map canvas for frame ${i} has zero dimensions: ${mapCanvas.width}x${mapCanvas.height}`, {
+                frameIndex: i,
+                timestampSeconds: timeSeconds,
+              });
+            }
+          } catch (mapErr) {
+            if (mapErr instanceof RenderingError) throw mapErr;
+            throw new RenderingError(
+              `Failed to obtain map frame ${i} at t=${timeSeconds.toFixed(3)}s: ${mapErr instanceof Error ? mapErr.message : String(mapErr)}`,
+              { frameIndex: i, timestampSeconds: timeSeconds }
+            );
           }
-        } else if (activeAsset.type === 'photo') {
-          activeMediaElement = mediaCache.get(activeAsset.id);
         }
-      }
 
-      // Composite complete visual frame
-      compositeRenderFrame(ctx, frame, {
-        mapCanvas,
-        activeMediaElement,
-        cinematicTreatment: config.cinematicTreatment,
-        drawSafeAreaGuides: config.drawSafeAreaGuides,
-        attributionText: config.attributionText,
-      });
+        const activeAsset = frame.story.activeMedia?.[0];
+        let activeMediaElement: CanvasImageSource | undefined = undefined;
+
+        if (activeAsset) {
+          if (activeAsset.type === 'video') {
+            const seeker = videoSeekers.get(activeAsset.id);
+            if (seeker) {
+              const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
+              const mediaTime = Math.max(0, timeSeconds - sceneStart);
+              const videoEl = await seeker.seekTo(mediaTime);
+              if (videoEl) {
+                activeMediaElement = videoEl;
+              }
+            }
+          } else if (activeAsset.type === 'photo') {
+            activeMediaElement = mediaCache.get(activeAsset.id);
+          }
+        }
+
+        // Composite complete visual frame
+        compositeRenderFrame(ctx, frame, {
+          mapCanvas,
+          requireMapCanvas: Boolean(getMapCanvas),
+          activeMediaElement,
+          cinematicTreatment: config.cinematicTreatment,
+          drawSafeAreaGuides: config.drawSafeAreaGuides,
+          attributionText: config.attributionText,
+        });
+      }
 
       // Encode video frame
       const presentationUs = Math.round(i * usPerFrame);
@@ -619,11 +787,34 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
     if (e.data && e.data.size > 0) chunks.push(e.data);
   };
 
-  recorder.start();
   const mediaCache = await preloadMediaElements(journey);
   const videoSeekers = await prepareVideoSeekers(journey);
 
   try {
+    // Pre-flight First-Frame Rendering & Pixel Validation Gate
+    onProgress?.({
+      currentFrame: 0,
+      totalFrames,
+      percent: 0,
+      phase: 'preparing',
+      elapsedMs: Math.round(performance.now() - startTimeMs),
+      estimatedRemainingMs: 0,
+      message: 'Validating initial frame rendering readiness...',
+    });
+
+    await validateAndPrepareFirstFrame({
+      journey,
+      config,
+      startTime,
+      fps,
+      ctx,
+      getMapCanvas,
+      videoSeekers,
+      mediaCache,
+    });
+
+    recorder.start();
+
     for (let i = 0; i < totalFrames; i++) {
       if (abortSignal?.aborted) {
         recorder.stop();
@@ -631,40 +822,70 @@ async function renderWithMediaRecorder(args: MediaRecorderPipelineArgs): Promise
       }
 
       const timeSeconds = startTime + i / fps;
-      const frame = evaluateRenderFrame(journey, timeSeconds, {
-        width: config.width,
-        height: config.height,
-        fps,
-        aspectRatio: config.aspectRatio,
-      });
 
-      const mapCanvas = getMapCanvas ? await getMapCanvas(frame) : null;
-      const activeAsset = frame.story.activeMedia?.[0];
-      let activeMediaElement: CanvasImageSource | undefined = undefined;
+      // Frame 0 was already composited and validated in pre-flight gate.
+      // Re-composite for all subsequent frames (i > 0).
+      if (i > 0) {
+        const frame = evaluateRenderFrame(journey, timeSeconds, {
+          width: config.width,
+          height: config.height,
+          fps,
+          aspectRatio: config.aspectRatio,
+        });
 
-      if (activeAsset) {
-        if (activeAsset.type === 'video') {
-          const seeker = videoSeekers.get(activeAsset.id);
-          if (seeker) {
-            const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
-            const mediaTime = Math.max(0, timeSeconds - sceneStart);
-            const videoEl = await seeker.seekTo(mediaTime);
-            if (videoEl) {
-              activeMediaElement = videoEl;
+        let mapCanvas: HTMLCanvasElement | ImageBitmap | null = null;
+        if (getMapCanvas) {
+          try {
+            mapCanvas = await getMapCanvas(frame);
+            if (!mapCanvas) {
+              throw new RenderingError(`Map canvas provider returned null for frame ${i} (t=${timeSeconds.toFixed(3)}s)`, {
+                frameIndex: i,
+                timestampSeconds: timeSeconds,
+              });
             }
+            if (mapCanvas.width === 0 || mapCanvas.height === 0) {
+              throw new RenderingError(`Map canvas for frame ${i} has zero dimensions: ${mapCanvas.width}x${mapCanvas.height}`, {
+                frameIndex: i,
+                timestampSeconds: timeSeconds,
+              });
+            }
+          } catch (mapErr) {
+            if (mapErr instanceof RenderingError) throw mapErr;
+            throw new RenderingError(
+              `Failed to obtain map frame ${i} at t=${timeSeconds.toFixed(3)}s: ${mapErr instanceof Error ? mapErr.message : String(mapErr)}`,
+              { frameIndex: i, timestampSeconds: timeSeconds }
+            );
           }
-        } else if (activeAsset.type === 'photo') {
-          activeMediaElement = mediaCache.get(activeAsset.id);
         }
-      }
 
-      compositeRenderFrame(ctx, frame, {
-        mapCanvas,
-        activeMediaElement,
-        cinematicTreatment: config.cinematicTreatment,
-        drawSafeAreaGuides: config.drawSafeAreaGuides,
-        attributionText: config.attributionText,
-      });
+        const activeAsset = frame.story.activeMedia?.[0];
+        let activeMediaElement: CanvasImageSource | undefined = undefined;
+
+        if (activeAsset) {
+          if (activeAsset.type === 'video') {
+            const seeker = videoSeekers.get(activeAsset.id);
+            if (seeker) {
+              const sceneStart = frame.story.activeScene?.startTime ?? (frame.isDwelling ? frame.timestampSeconds : 0);
+              const mediaTime = Math.max(0, timeSeconds - sceneStart);
+              const videoEl = await seeker.seekTo(mediaTime);
+              if (videoEl) {
+                activeMediaElement = videoEl;
+              }
+            }
+          } else if (activeAsset.type === 'photo') {
+            activeMediaElement = mediaCache.get(activeAsset.id);
+          }
+        }
+
+        compositeRenderFrame(ctx, frame, {
+          mapCanvas,
+          requireMapCanvas: Boolean(getMapCanvas),
+          activeMediaElement,
+          cinematicTreatment: config.cinematicTreatment,
+          drawSafeAreaGuides: config.drawSafeAreaGuides,
+          attributionText: config.attributionText,
+        });
+      }
 
       // Frame interval wait for real-time stream capture
       await new Promise((r) => setTimeout(r, Math.round(1000 / fps)));
