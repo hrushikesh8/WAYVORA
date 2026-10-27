@@ -368,6 +368,7 @@ describe('Geocoding & Place Search Domain', () => {
       expect(newSeg.sourceFormat).toBe('manual');
       expect(newSeg.metadata?.provenance).toEqual({
         source: 'manual-connection',
+        category: 'manual_direct',
         connectionType: 'direct-line',
         geocodingProvider: 'photon',
       });

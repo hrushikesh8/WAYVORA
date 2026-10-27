@@ -1,8 +1,20 @@
 # Wayvora — Engineering Milestone Verification & Handoff
 
-> Session: Phase 2 — Route Geometry Correctness Only  
+> Session: Phase 3 — Place Search and Manual Route Editing  
 > Date: 2026-10-26  
-> Status: Phase 2 COMPLETE & VERIFIED · 354/354 Unit & Acceptance Tests Passing (25/25 Suites) · Production Build Green (758ms) · Driving Road Curvature Verified · Hiking Trail Switchbacks Preserved · Recorded GPX Track Protection Active · Provenance Categorization Established · Live OSRM Integration Verified  
+> Status: Phase 3 COMPLETE & VERIFIED · 370/370 Unit & Acceptance Tests Passing (26/26 Suites) · Production Build Green (669ms) · Place Search Autocomplete Verified · Geocoded Place Waypoint Connection Verified · Manual Waypoint Editing (Insert/Move/Delete) Guarded · Recorded GPX Track Protection Intact · Full Undo/Redo Roundtrip Verified · Remote Sync Clean on main  
+
+---
+
+## 0. Executive Summary: Phase 3 — Place Search and Manual Route Editing
+
+Phase 3 verifies that users can discover real-world places (cities, landmarks, peaks, trailheads) and create or modify journeys through explicit stops and waypoints.
+- **Debounced Place Search**: Integrated Photon geocoding with 280ms debounce, abort controller on keystrokes/unmount, keyboard navigation (ArrowUp/Down/Enter/Escape), transparent OSM attribution, and rate-limit/timeout handling.
+- **Geocoded Waypoint Insertion (`appendPlaceToJourney`)**: Appending search results connects them from the previous terminal point with `source: 'manual-connection'` and explicit `category: 'manual_direct'`.
+- **Manual Point Manipulation (`insertRoutePoint`, `moveRoutePoint`, `deleteRoutePoint`)**: Allows inserting, moving, and deleting waypoints with coordinate validation (-90..90, -180..180), minimum 2 points per segment domain rule enforcement, and automatic synchronization of attached stop positions.
+- **Recorded GPX Protection & Provenance Integrity**: GPX tracks remain protected against unpermitted routing overwrite. Failed routes report honest errors without inventing straight lines.
+- **Undo / Redo Stack Integration**: All editing operations participate in immutable undo/redo history stacks.
+- **Acceptance Verification**: 16 dedicated unit tests in `place-search-and-editing.test.ts` and 27 tests in `geocoding.test.ts` passing; 370/370 total test suite passes; production build succeeds in 669ms.
 
 ---
 

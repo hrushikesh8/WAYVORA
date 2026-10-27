@@ -1302,6 +1302,7 @@ export function appendPlaceToJourney(
       lastModifiedAt: new Date().toISOString(),
       provenance: {
         source: 'manual-connection',
+        category: 'manual_direct',
         connectionType: 'direct-line',
         geocodingProvider: 'photon',
       },
